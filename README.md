@@ -10,7 +10,7 @@ Clone the repo (with submodules) and install the `dark_pion_widths` package:
 
 ```bash
 git clone --recurse-submodules <repo-url>
-cd model_benchmarking
+cd svej-benchmarking
 pip install -e .
 ```
 
@@ -122,6 +122,88 @@ python write_cards.py ... --lhe mg5_output/mediator_pair_down/Events/run_01/unwe
 
 Then pass `pythia_card.dat` to your Pythia driver. The card sets all dark
 sector masses, lifetimes, branching ratios, and HiddenValley parameters.
+
+## Submitting a parameter grid (Slurm)
+
+`submit_grid.py` automates card generation and Slurm job submission for a full
+Cartesian grid of model parameters.  It requires no hardcoded cluster settings —
+all Slurm resource options are supplied on the command line, so the script works
+on any cluster.
+
+### Prerequisites
+
+The compiled MadGraph process directory must already exist (see Step 1 above).
+Generate it once:
+
+```bash
+mg5_aMC proc_card.txt
+```
+
+### Example
+
+```bash
+python submit_grid.py \
+    --mXd 1000 2000 3000 4000 \
+    --mPiD 5 10 20 \
+    --ctau 1 10 100 \
+    --process-dir mg5_output/mediator_pair_down \
+    --env-setup "source /cvmfs/sft.cern.ch/lcg/views/LCG_106/x86_64-el9-gcc13-opt/setup.sh" \
+    --partition cpu \
+    --time 04:00:00 \
+    --account myproject \
+    --nevents 10000
+```
+
+This submits 4 × 3 × 3 = 36 Slurm jobs.  Use `--kappa` instead of `--ctau` to
+specify the coupling directly.
+
+### Dry run
+
+Always preview the job scripts before submitting:
+
+```bash
+python submit_grid.py ... --dry-run
+```
+
+### All options
+
+| Option | Description |
+|---|---|
+| `--mXd` | Mediator mass values [GeV] (space-separated list) |
+| `--mPiD` | Dark pion mass values [GeV] |
+| `--ctau` | Target diagonal pion c·τ values [mm] |
+| `--kappa` | Coupling κ values (mutually exclusive with `--ctau`) |
+| `--process-dir` | Compiled MadGraph process directory |
+| `--env-setup` | Shell command to set up the environment in each job |
+| `--partition` | Slurm partition / queue |
+| `--account` | Slurm account / project |
+| `--time` | Wall-clock time limit (e.g. `04:00:00`) |
+| `--mem` | Memory per node (e.g. `4G`) |
+| `--cpus-per-task` | CPUs per task |
+| `--constraint` | Node feature constraint (e.g. `el9`) |
+| `--sbatch-opt` | Any additional `#SBATCH` directive, e.g. `--sbatch-opt='--nodes=1'` (repeatable) |
+| `--runs-dir` | Directory for per-point run dirs (default: `runs/`) |
+| `--logs-dir` | Directory for Slurm stdout/stderr logs (default: `logs/`) |
+| `--cards-base` | Base directory for generated cards (default: `cards/`) |
+| `--nevents` | Events per job (default: 10000) |
+| `--sqrts` | Centre-of-mass energy [GeV] (default: 13600) |
+| `--dry-run` | Print job scripts without submitting |
+
+### Output
+
+Each job hard-link-copies the compiled process directory into
+`runs/<point>/` for isolation (no race condition between parallel jobs), then
+copies the generated cards and launches MadGraph.
+
+Events land in:
+
+```
+runs/<point>/Events/<point>/
+```
+
+Slurm logs are written to `logs/<point>.out` and `logs/<point>.err`.
+
+---
 
 ## `dark_pion_widths` API
 
