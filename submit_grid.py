@@ -110,7 +110,8 @@ def build_job_script(
         "",
         "# Launch MadGraph in batch mode with a unique run name",
         f'echo "Launching MadGraph for {point_name}"',
-        f'echo "launch {run_dir} {point_name} -f" | {mg5_exe}',
+        f'cd "{run_dir}"',
+        f'echo "launch . {point_name} -f" | {mg5_exe}',
         "",
         f'echo "Done. Events are in {run_dir}/Events/{point_name}/"',
     ]
