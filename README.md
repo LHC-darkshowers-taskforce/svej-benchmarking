@@ -232,8 +232,38 @@ for (a, b), r in results['off_diagonal'].items():
 
 ## Plotting
 
-Standalone scripts for visualising the parameter space. All write PDFs to the
-current directory.
+### Cross section vs mediator mass
+
+`plot_xsec.py` extracts cross sections from MadGraph output and plots σ vs m_Xd,
+grouped by κ.
+
+**Slurm grid output** (produced by `submit_grid.py`):
+
+```bash
+python plotting/plot_xsec.py --runs-dir runs/
+# Output: xsec.pdf
+```
+
+**Single process directory**:
+
+```bash
+python plotting/plot_xsec.py --process-dir mg5_output/mediator_pair_down
+# Output: xsec.pdf
+```
+
+Options:
+
+```
+--runs-dir DIR       Slurm grid output directory (one subdir per parameter point)
+--process-dir DIR    Single MadGraph process directory (Events/run_*/ layout)
+--output FILE        Output filename (default: xsec.pdf)
+--no-group           Plot all runs as one series instead of grouping by κ
+```
+
+### Parameter-space visualisation
+
+Standalone scripts for visualising the dark pion parameter space. All write PDFs
+to the current directory.
 
 ```bash
 # c·τ vs model parameters (1D and 2D scans)
