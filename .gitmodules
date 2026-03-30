@@ -1,0 +1,3 @@
+[submodule "models/t-channel_dark_QCD"]
+	path = models/t-channel_dark_QCD
+	url = https://github.com/chscherb/t-channel_dark_QCD
