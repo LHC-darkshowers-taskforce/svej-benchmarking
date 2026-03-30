@@ -178,15 +178,17 @@ def parse_args():
                           "Run before MadGraph is called.")
 
     # --- Slurm options (none hardcoded) ---
-    slurm = p.add_argument_group("slurm resource options (all optional, none hardcoded)")
-    slurm.add_argument("--partition", default=None,
-                       help="Slurm partition / queue name")
+    slurm = p.add_argument_group("slurm resource options")
+    slurm.add_argument("--partition", default="sooner_test",
+                       help="Slurm partition / queue name (default: sooner_test)")
     slurm.add_argument("--account", default=None,
                        help="Slurm account / project to charge")
     slurm.add_argument("--time", default=None,
                        help="Wall-clock time limit (e.g. 04:00:00)")
-    slurm.add_argument("--mem", default=None,
-                       help="Memory per node (e.g. 4G)")
+    slurm.add_argument("--mem", default="16G",
+                       help="Memory per node (default: 16G)")
+    slurm.add_argument("--container", default="el9hw",
+                       help="Slurm container image (default: el9hw)")
     slurm.add_argument("--cpus-per-task", default=None,
                        help="CPUs per task (default: cluster default)")
     slurm.add_argument("--constraint", default=None,
@@ -234,6 +236,7 @@ def main():
         "account":       args.account,
         "time":          args.time,
         "mem":           args.mem,
+        "container":     args.container,
         "cpus-per-task": args.cpus_per_task,
         "constraint":    args.constraint,
     }
