@@ -1,4 +1,4 @@
-import model models/t-channel_dark_QCD/darkQCD_fv_down
+import model ./models/t-channel_dark_QCD/darkQCD_fv_down
 define qd = dDark1 dDark1~ dDark2 dDark2~ dDark3 dDark3~
 generate p p > qd qd
 add process p p > qd qd j
