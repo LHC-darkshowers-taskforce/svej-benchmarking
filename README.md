@@ -74,22 +74,22 @@ Output cards are written to `cards/mXd{mXd}_mPiD{mPiD}_ctau{ctau}/` by default
 
 ### Step 1 — Generate the process (once)
 
-Write a `proc_card.txt`:
-
-```
-import model models/t-channel_dark_QCD/darkQCD_fv_down
-generate p p > x x~
-output mg5_output/mediator_pair_down
-```
-
-Run it:
+Ready-made proc cards are in `proc_cards/`. Run the one you want:
 
 ```bash
-mg5_aMC proc_card.txt
+mg5_aMC proc_cards/mediator_pair.txt
+# → mg5_output/mediator_pair/
+
+mg5_aMC proc_cards/dark_quark_pair_multijet.txt
+# → mg5_output/dark_quark_pair_multijet/
 ```
 
-This compiles the matrix elements into `mg5_output/mediator_pair_down/`. Only
-needs to be done once — reuse the same directory for all parameter points.
+The dark quark multijet card generates `p p > qd qd`, `p p > qd qd j`, and
+`p p > qd qd j j` as a combined process (`qd` is a multiparticle label for
+`dDark1 dDark1~ dDark2 dDark2~ dDark3 dDark3~`).
+
+This compiles the matrix elements once — reuse the same directory for all
+parameter points.
 
 ### Step 2 — Launch a run (per parameter point)
 
@@ -133,10 +133,10 @@ on any cluster.
 ### Prerequisites
 
 The compiled MadGraph process directory must already exist (see Step 1 above).
-Generate it once:
+Generate it once using a proc card from `proc_cards/`:
 
 ```bash
-mg5_aMC proc_card.txt
+mg5_aMC proc_cards/mediator_pair.txt
 ```
 
 ### Example

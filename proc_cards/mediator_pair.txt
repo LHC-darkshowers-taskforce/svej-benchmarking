@@ -1,0 +1,3 @@
+import model models/t-channel_dark_QCD/darkQCD_fv_down
+generate p p > x x~
+output mg5_output/mediator_pair
