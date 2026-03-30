@@ -168,6 +168,7 @@ Block mass
    13 1.056600e-01 # MMU
    15 1.777000e+00 # MTA
    23 9.118760e+01 # MZ
+   24 7.982436e+01 # MW
    25 1.250000e+02 # MH
   4900001 {mXd:.6e} # MassX
   4900101 {mDarkQ:.6e} # MDarkq1
@@ -621,7 +622,7 @@ cp "$CARDS_DIR/param_card.dat" "$PROCESS_DIR/Cards/param_card.dat"
 cp "$CARDS_DIR/run_card.dat"   "$PROCESS_DIR/Cards/run_card.dat"
 
 echo "Launching MadGraph in batch mode..."
-echo "launch -f" | "$MG5" "$PROCESS_DIR"
+echo "launch $PROCESS_DIR -f" | "$MG5"
 
 echo "Done.  Events are in $PROCESS_DIR/Events/"
 """
