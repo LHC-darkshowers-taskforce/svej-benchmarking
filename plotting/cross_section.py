@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-plot_xsec.py
-------------
+cross_section.py
+----------------
 Extract mediator pair-production cross sections from MadGraph output
 and plot them as a function of mediator mass.
 
@@ -26,13 +26,13 @@ Results are grouped by kappa value and plotted as σ vs m_Xd.
 Usage
 -----
     # Slurm grid output
-    python plotting/plot_xsec.py --runs-dir runs/
+    python plotting/cross_section.py --runs-dir runs/
 
     # Single process directory
-    python plotting/plot_xsec.py --process-dir mg5_output/mediator_pair_down
+    python plotting/cross_section.py --process-dir mg5_output/mediator_pair_down
 
     # Disable kappa grouping
-    python plotting/plot_xsec.py --runs-dir runs/ --no-group
+    python plotting/cross_section.py --runs-dir runs/ --no-group
 """
 
 import argparse
@@ -42,11 +42,13 @@ import os
 import re
 import sys
 
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import numpy as np
+
+from plotting_utils import apply_style, save_fig
+
+apply_style()
 
 # ---------------------------------------------------------------------------
 # Regex patterns (work on both banner files and LHE headers)
@@ -193,10 +195,9 @@ def plot_xsec(results: list[dict], group_by_kappa: bool, output: str) -> None:
     ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10.0, subs=[1.0], numticks=100))
     ax.yaxis.set_minor_locator(matplotlib.ticker.LogLocator(base=10.0,
                                 subs=np.arange(2, 10) * 0.1, numticks=100))
-    ax.grid(True, which="both", linestyle="--", alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(output, bbox_inches="tight")
-    print(f"Saved {output}")
+
+    fig.tight_layout()
+    save_fig(fig, output)
 
 
 # ---------------------------------------------------------------------------
