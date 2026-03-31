@@ -84,7 +84,7 @@ def build_job_script(
         lines.append(f"#SBATCH {opt}")
 
     lines.append("")
-    lines.append("set -euo pipefail")
+    #lines.append("set -euo pipefail")
     lines.append("")
 
     # Environment setup
@@ -93,15 +93,14 @@ def build_job_script(
         lines.append(env_setup)
         lines.append("")
 
-    # Isolated run directory via hard links
+    # Isolated run directory (full copy, works across filesystems)
     lines += [
-        "# Hard-link copy of compiled process directory (fast, no duplicate binaries)",
-        "# This isolates Cards/ and Events/ so parallel jobs don't conflict.",
+        "# Full copy of compiled process directory — isolates Cards/ and Events/ per job.",
         f'if [[ -d "{run_dir}" ]]; then',
         f'    echo "Run directory already exists: {run_dir} — skipping copy."',
         f'else',
         f'    echo "Creating isolated run directory: {run_dir}"',
-        f'    cp -rl "{abs_process}" "{run_dir}"',
+        f'    cp -r "{abs_process}" "{run_dir}"',
         f'fi',
         "",
         "# Copy cards for this parameter point",
@@ -162,8 +161,8 @@ def parse_args():
     paths = p.add_argument_group("paths")
     paths.add_argument("--process-dir", required=True,
                        help="Compiled MadGraph process directory")
-    paths.add_argument("--runs-dir", default="runs",
-                       help="Directory for per-point isolated run dirs (default: runs/)")
+    paths.add_argument("--runs-dir", default="/ourdisk/hpc/ouhep/jburzyns/dont_archive/model_benchmarking_runs",
+                       help="Directory for per-point isolated run dirs")
     paths.add_argument("--cards-base", default="cards",
                        help="Base directory where write_cards.py writes cards (default: cards/)")
     paths.add_argument("--logs-dir", default="logs",

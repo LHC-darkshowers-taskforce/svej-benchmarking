@@ -563,7 +563,16 @@ def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0) -> N
   average = event_norm
 
 #*********************************************************************
-# Cuts on dark quarks (pT > 20 GeV to regulate t-channel divergence)
+# MLM jet matching
+#*********************************************************************
+  2.0  = lhe_version
+  1    = ickkw
+  T    = cut_decays
+  0.0  = drjj
+  20   = xqcut
+
+#*********************************************************************
+# Cuts on dark quarks and jets (pT > 20 GeV to regulate t-channel divergence)
 #*********************************************************************
   {{4900101: 20, 4900102: 20, 4900103: 20}} = pt_min_pdg
 
@@ -571,7 +580,7 @@ def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0) -> N
 # Misc
 #*********************************************************************
   15.0 = bwcutoff
-  4    = maxjetflavor
+  5    = maxjetflavor
   True = use_syst
   systematics = systematics_program
   ['--mur=0.5,1,2', '--muf=0.5,1,2', '--pdf=errorset'] = systematics_arguments

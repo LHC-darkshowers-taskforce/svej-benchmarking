@@ -10,3 +10,15 @@ build/
 # Outputs
 *.pdf
 *.csv
+
+# MadGraph runtime artifacts
+cards/
+logs/
+runs/
+mg5_output/
+MG5_debug
+ME5_debug
+
+# Scratch
+py.py
+submit_test.sh
