@@ -3,40 +3,29 @@
 ctau_contours.py
 ----------------
 Iso-lifetime contours (c·τ = 1, 10, 100, 1000 mm) in three 2D parameter
-planes spanned by {m_piD, m_X, κ}, with the constraint f_D = m_piD enforced
-everywhere:
+planes, plus a coupling-overlay figure.  The constraint fD = m_piD is
+enforced throughout.
 
-  1. (m_piD, m_X)  — one panel per κ
-  2. (m_piD, κ)    — one panel per m_X
-  3. (m_X,   κ)    — one panel per m_piD
-
-Plus an overlay figure showing how the c·τ = 10 mm contour shifts with κ
-in the (m_piD, m_X) plane.
+Four separate PDFs per config:
+  1. (m_piD, mediator)  — one panel per coupling value
+  2. (m_piD, coupling)  — one panel per mediator mass
+  3. (mediator, coupling) — one panel per m_piD
+  4. coupling-overlay   — c·τ = 10 mm contour shift vs coupling
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-from dark_pion_widths import DarkPionModel
 from plotting_utils import (
     apply_style, save_fig,
-    CONTOUR_SPECIES, CTAU_LEVELS_MM, CTAU_COLORS,
+    ModelPlotConfig, PionSpec,
+    CTAU_LEVELS_MM, CTAU_COLORS,
     ctau_legend_handles, contour_species_handles,
 )
+from model_config import ALL_CONFIGS
 
 apply_style()
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-MPID_REF  = 10.0
-MX_REF    = 2000.0
-KAPPA_REF = 0.5
-
-KAPPA_SCAN = [0.1, 0.3, 0.5, 1.0]
-MX_SCAN    = [500, 1000, 2000, 5000]
-MPID_SCAN  = [5.0, 10.0, 50.0, 100.0]
 
 N_POINTS = 120
 
@@ -45,21 +34,33 @@ N_POINTS = 120
 # Grid builder
 # ---------------------------------------------------------------------------
 
-def _ctau_grid(x_vals, y_vals, x_name, y_name, fixed):
+def _ctau_grid(
+    x_vals: np.ndarray,
+    y_vals: np.ndarray,
+    x_name: str,
+    y_name: str,
+    fixed: dict,
+    model_class,
+    contour_specs: list[PionSpec],
+) -> dict:
+    """
+    Compute c·τ on a 2-D grid for each pion in contour_specs.
+
+    Returns {pion_id: np.ndarray shape (Ny, Nx)}.
+    The constraint fD = m_piD is applied whenever m_piD appears in the grid.
+    """
     Nx, Ny = len(x_vals), len(y_vals)
-    grids = {s[0]: np.empty((Ny, Nx)) for s in CONTOUR_SPECIES}
+    grids  = {s.pion_id: np.empty((Ny, Nx)) for s in contour_specs}
 
     for iy, yv in enumerate(y_vals):
         for ix, xv in enumerate(x_vals):
             params = dict(fixed)
             params[x_name] = xv
             params[y_name] = yv
-            params["fD"] = params["m_piD"]
-            model = DarkPionModel(**params)
-
-            grids["diag_14"][iy, ix] = model.ctau_diag_mm(14)
-            grids["off_01"] [iy, ix] = model.ctau_off_diag_mm(0, 1)
-            grids["off_02"] [iy, ix] = model.ctau_off_diag_mm(0, 2)
+            params["fD"]   = params["m_piD"]   # enforce fD = m_piD
+            model = model_class(**params)
+            for s in contour_specs:
+                grids[s.pion_id][iy, ix] = model.ctau_for_pion(s.pion_id)
 
     return grids
 
@@ -68,9 +69,11 @@ def _ctau_grid(x_vals, y_vals, x_name, y_name, fixed):
 # Drawing helpers
 # ---------------------------------------------------------------------------
 
-def _draw_contours(ax, X, Y, grids, levels_mm=CTAU_LEVELS_MM, label_contours=True):
-    for key, label, ls, lw in CONTOUR_SPECIES:
-        Z = grids[key]
+def _draw_contours(ax, X, Y, grids, contour_specs, levels_mm=CTAU_LEVELS_MM,
+                   label_first=False):
+    first_drawn = True
+    for s in contour_specs:
+        Z = grids[s.pion_id]
         if not np.any(np.isfinite(Z)):
             continue
         for ctau_val in levels_mm:
@@ -78,160 +81,201 @@ def _draw_contours(ax, X, Y, grids, levels_mm=CTAU_LEVELS_MM, label_contours=Tru
                 cs = ax.contour(X, Y, Z,
                                 levels=[ctau_val],
                                 colors=[CTAU_COLORS[ctau_val]],
-                                linestyles=[ls],
-                                linewidths=[lw])
-                if label_contours and key == "diag_14":
+                                linestyles=[s.linestyle],
+                                linewidths=[s.linewidth])
+                if label_first and first_drawn and s is contour_specs[0]:
                     ax.clabel(cs, fmt=f"{ctau_val:.0f} mm", fontsize=7, inline=True)
             except Exception:
                 pass
+        first_drawn = False
 
 
-def _add_legends(axes):
+def _add_legends(axes, contour_specs):
     leg1 = axes[-1].legend(handles=ctau_legend_handles(),
                             title=r"$c\tau$", fontsize=8, loc="lower right")
     axes[-1].add_artist(leg1)
-    axes[-1].legend(handles=contour_species_handles(),
+    axes[-1].legend(handles=contour_species_handles(contour_specs),
                     title="species", fontsize=8, loc="upper left")
 
 
 # ---------------------------------------------------------------------------
-# Figure 1: (m_piD, m_X) plane
+# Figure 1: (m_piD, mediator) plane — panels per coupling value
 # ---------------------------------------------------------------------------
 
-def figure_mpiD_mX():
-    m_piD_vals = np.geomspace(2.0,   500.0, N_POINTS)
-    m_X_vals   = np.geomspace(300.0, 1e4,   N_POINTS)
-    X, Y = np.meshgrid(m_piD_vals, m_X_vals)
+def figure_mpiD_mediator(config: ModelPlotConfig,
+                          coupling_scan=None) -> None:
+    if coupling_scan is None:
+        coupling_scan = [0.1, 0.3, 0.5, 1.0]
 
-    fig, axes = plt.subplots(1, len(KAPPA_SCAN),
-                             figsize=(5 * len(KAPPA_SCAN), 5), sharey=True)
+    med          = config.mediator_param
+    coup         = config.coupling_param
+    m_piD_vals   = np.geomspace(2.0,   500.0, N_POINTS)
+    m_med_vals   = np.geomspace(300.0, 1e4,   N_POINTS)
+    X, Y         = np.meshgrid(m_piD_vals, m_med_vals)
+    base         = dict(config.base_params)
+
+    fig, axes = plt.subplots(1, len(coupling_scan),
+                             figsize=(5 * len(coupling_scan), 5), sharey=True)
+    if len(coupling_scan) == 1:
+        axes = [axes]
     fig.suptitle(
-        r"Iso-$c\tau$ contours in $(m_{\pi_D},\, m_X)$ plane  ($f_D = m_{\pi_D}$)"
+        rf"Iso-$c\tau$ contours in $(m_{{\pi_D}},\, {config.mediator_label.split('[')[0].strip()})$ plane"
+        rf"  ($f_D = m_{{\pi_D}}$)  —  {config.name}"
     )
 
-    for ax, kappa in zip(axes, KAPPA_SCAN):
-        fixed = dict(kappa=kappa, m_piD=MPID_REF, m_X=MX_REF, fD=MPID_REF)
-        grids = _ctau_grid(m_piD_vals, m_X_vals, "m_piD", "m_X", fixed)
-        _draw_contours(ax, X, Y, grids, label_contours=False)
+    for ax, coup_val in zip(axes, coupling_scan):
+        fixed = dict(base)
+        fixed[coup] = coup_val
+        grids = _ctau_grid(m_piD_vals, m_med_vals, "m_piD", med,
+                            fixed, config.model_class, config.contour_pion_specs)
+        _draw_contours(ax, X, Y, grids, config.contour_pion_specs)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(r"$m_{\pi_D}$  [GeV]")
-        ax.set_title(rf"$\kappa = {kappa}$")
+        ax.set_title(rf"{config.coupling_label} $= {coup_val}$")
 
-    axes[0].set_ylabel(r"$m_X$  [GeV]")
-    _add_legends(axes)
-
+    axes[0].set_ylabel(config.mediator_label)
+    _add_legends(axes, config.contour_pion_specs)
     fig.tight_layout()
-    save_fig(fig, "ctau_contours_mpiD_mX.pdf")
+    save_fig(fig, f"ctau_contours_mpiD_mediator_{config.tag}.pdf")
 
 
 # ---------------------------------------------------------------------------
-# Figure 2: (m_piD, κ) plane
+# Figure 2: (m_piD, coupling) plane — panels per mediator mass
 # ---------------------------------------------------------------------------
 
-def figure_mpiD_kappa():
-    m_piD_vals = np.geomspace(2.0, 500.0, N_POINTS)
-    kappa_vals = np.geomspace(0.1, 1.0,   N_POINTS)
-    X, Y = np.meshgrid(m_piD_vals, kappa_vals)
+def figure_mpiD_coupling(config: ModelPlotConfig,
+                          mediator_scan=None) -> None:
+    if mediator_scan is None:
+        mediator_scan = [500, 1000, 2000, 5000]
 
-    fig, axes = plt.subplots(1, len(MX_SCAN),
-                             figsize=(5 * len(MX_SCAN), 5), sharey=True)
+    med          = config.mediator_param
+    coup         = config.coupling_param
+    m_piD_vals   = np.geomspace(2.0,  500.0, N_POINTS)
+    coup_vals    = np.geomspace(0.05, 2.0,   N_POINTS)
+    X, Y         = np.meshgrid(m_piD_vals, coup_vals)
+    base         = dict(config.base_params)
+
+    fig, axes = plt.subplots(1, len(mediator_scan),
+                             figsize=(5 * len(mediator_scan), 5), sharey=True)
+    if len(mediator_scan) == 1:
+        axes = [axes]
     fig.suptitle(
-        r"Iso-$c\tau$ contours in $(m_{\pi_D},\, \kappa)$ plane  ($f_D = m_{\pi_D}$)"
+        rf"Iso-$c\tau$ contours in $(m_{{\pi_D}},\, {config.coupling_label})$ plane"
+        rf"  ($f_D = m_{{\pi_D}}$)  —  {config.name}"
     )
 
-    for ax, mX in zip(axes, MX_SCAN):
-        fixed = dict(m_X=mX, m_piD=MPID_REF, kappa=KAPPA_REF, fD=MPID_REF)
-        grids = _ctau_grid(m_piD_vals, kappa_vals, "m_piD", "kappa", fixed)
-        _draw_contours(ax, X, Y, grids, label_contours=False)
+    for ax, mmed in zip(axes, mediator_scan):
+        fixed = dict(base)
+        fixed[med] = mmed
+        grids = _ctau_grid(m_piD_vals, coup_vals, "m_piD", coup,
+                            fixed, config.model_class, config.contour_pion_specs)
+        _draw_contours(ax, X, Y, grids, config.contour_pion_specs)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(r"$m_{\pi_D}$  [GeV]")
-        ax.set_title(rf"$m_X = {mX}$ GeV")
+        med_label = config.mediator_label.split('[')[0].strip()
+        ax.set_title(rf"{med_label} $= {mmed}$ GeV")
 
-    axes[0].set_ylabel(r"$|\kappa|$")
-
+    axes[0].set_ylabel(config.coupling_label)
     leg1 = axes[-1].legend(handles=ctau_legend_handles(),
                             title=r"$c\tau$", fontsize=8, loc="lower right")
     axes[-1].add_artist(leg1)
-    axes[-1].legend(handles=contour_species_handles(),
+    axes[-1].legend(handles=contour_species_handles(config.contour_pion_specs),
                     title="species", fontsize=8, loc="upper right")
-
     fig.tight_layout()
-    save_fig(fig, "ctau_contours_mpiD_kappa.pdf")
+    save_fig(fig, f"ctau_contours_mpiD_coupling_{config.tag}.pdf")
 
 
 # ---------------------------------------------------------------------------
-# Figure 3: (m_X, κ) plane
+# Figure 3: (mediator, coupling) plane — panels per m_piD
 # ---------------------------------------------------------------------------
 
-def figure_mX_kappa():
-    m_X_vals   = np.geomspace(300.0, 1e4, N_POINTS)
-    kappa_vals = np.geomspace(0.1,   1.0, N_POINTS)
-    X, Y = np.meshgrid(m_X_vals, kappa_vals)
+def figure_mediator_coupling(config: ModelPlotConfig,
+                              mpiD_scan=None) -> None:
+    if mpiD_scan is None:
+        mpiD_scan = [5.0, 10.0, 50.0, 100.0]
 
-    fig, axes = plt.subplots(1, len(MPID_SCAN),
-                             figsize=(5 * len(MPID_SCAN), 5), sharey=True)
+    med        = config.mediator_param
+    coup       = config.coupling_param
+    m_med_vals = np.geomspace(300.0, 1e4,  N_POINTS)
+    coup_vals  = np.geomspace(0.05,  2.0,  N_POINTS)
+    X, Y       = np.meshgrid(m_med_vals, coup_vals)
+    base       = dict(config.base_params)
+
+    fig, axes = plt.subplots(1, len(mpiD_scan),
+                             figsize=(5 * len(mpiD_scan), 5), sharey=True)
+    if len(mpiD_scan) == 1:
+        axes = [axes]
     fig.suptitle(
-        r"Iso-$c\tau$ contours in $(m_X,\, \kappa)$ plane  ($f_D = m_{\pi_D}$)"
+        rf"Iso-$c\tau$ contours in $({config.mediator_label.split('[')[0].strip()},\, "
+        rf"{config.coupling_label})$ plane"
+        rf"  ($f_D = m_{{\pi_D}}$)  —  {config.name}"
     )
 
-    for ax, mpiD in zip(axes, MPID_SCAN):
-        fixed = dict(m_piD=mpiD, m_X=MX_REF, kappa=KAPPA_REF, fD=mpiD)
-        grids = _ctau_grid(m_X_vals, kappa_vals, "m_X", "kappa", fixed)
-        _draw_contours(ax, X, Y, grids, label_contours=False)
+    for ax, mpiD in zip(axes, mpiD_scan):
+        fixed = dict(base)
+        fixed["m_piD"] = mpiD
+        grids = _ctau_grid(m_med_vals, coup_vals, med, coup,
+                            fixed, config.model_class, config.contour_pion_specs)
+        _draw_contours(ax, X, Y, grids, config.contour_pion_specs)
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(r"$m_X$  [GeV]")
+        ax.set_xlabel(config.mediator_label)
         ax.set_title(rf"$m_{{\pi_D}} = f_D = {mpiD:.0f}$ GeV")
 
-    axes[0].set_ylabel(r"$|\kappa|$")
-
+    axes[0].set_ylabel(config.coupling_label)
     leg1 = axes[-1].legend(handles=ctau_legend_handles(),
                             title=r"$c\tau$", fontsize=8, loc="upper left")
     axes[-1].add_artist(leg1)
-    axes[-1].legend(handles=contour_species_handles(),
+    axes[-1].legend(handles=contour_species_handles(config.contour_pion_specs),
                     title="species", fontsize=8, loc="lower right")
-
     fig.tight_layout()
-    save_fig(fig, "ctau_contours_mX_kappa.pdf")
+    save_fig(fig, f"ctau_contours_mediator_coupling_{config.tag}.pdf")
 
 
 # ---------------------------------------------------------------------------
-# Figure 4: κ-overlay — shifting c·τ = 10 mm contour in (m_piD, m_X) plane
+# Figure 4: coupling overlay — c·τ = 10 mm contour in (m_piD, mediator)
 # ---------------------------------------------------------------------------
 
-def figure_overlay_kappa():
-    m_piD_vals  = np.geomspace(2.0,   500.0, N_POINTS)
-    m_X_vals    = np.geomspace(300.0, 1e4,   N_POINTS)
-    X, Y        = np.meshgrid(m_piD_vals, m_X_vals)
-    kappa_fine  = np.array([0.1, 0.2, 0.3, 0.5, 0.7, 1.0])
-    kappa_cmap  = plt.get_cmap("cool", len(kappa_fine))
-    ctau_target = 10.0
+def figure_coupling_overlay(config: ModelPlotConfig,
+                              coupling_fine=None,
+                              ctau_target: float = 10.0) -> None:
+    if coupling_fine is None:
+        coupling_fine = [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
-    fig.suptitle(
-        rf"$c\tau = {ctau_target:.0f}$ mm contour in $(m_{{\pi_D}},\, m_X)$"
-        r" for varying $\kappa$  ($f_D = m_{\pi_D}$)"
-    )
+    med          = config.mediator_param
+    coup         = config.coupling_param
+    m_piD_vals   = np.geomspace(2.0,   500.0, N_POINTS)
+    m_med_vals   = np.geomspace(300.0, 1e4,   N_POINTS)
+    X, Y         = np.meshgrid(m_piD_vals, m_med_vals)
+    cmap         = plt.get_cmap("cool", len(coupling_fine))
+    base         = dict(config.base_params)
 
-    for ax, spec_key, spec_label in [
-        (ax1, "diag_14", r"$\pi^{T15}$"),
-        (ax2, "off_01",  r"$\pi^{(0,1)}$"),
-    ]:
+    for s in config.contour_pion_specs:
+        fig, ax = plt.subplots(figsize=(7, 6))
+        fig.suptitle(
+            rf"$c\tau = {ctau_target:.0f}$ mm contour in "
+            rf"$(m_{{\pi_D}},\, {config.mediator_label.split('[')[0].strip()})$"
+            rf" for varying {config.coupling_label}  ($f_D = m_{{\pi_D}}$)"
+            f"\n{config.name}  —  {s.label}"
+        )
         legend_handles = []
-        for ci, kappa in enumerate(kappa_fine):
-            fixed = dict(kappa=kappa, m_piD=MPID_REF, m_X=MX_REF, fD=MPID_REF)
-            grids = _ctau_grid(m_piD_vals, m_X_vals, "m_piD", "m_X", fixed)
-            Z = grids[spec_key]
+
+        for ci, coup_val in enumerate(coupling_fine):
+            fixed = dict(base)
+            fixed[coup] = coup_val
+            grids = _ctau_grid(m_piD_vals, m_med_vals, "m_piD", med,
+                                fixed, config.model_class, [s])
+            Z = grids[s.pion_id]
             if not np.any(np.isfinite(Z)):
                 continue
             try:
                 ax.contour(X, Y, Z, levels=[ctau_target],
-                           colors=[kappa_cmap(ci)], linewidths=[1.8])
+                           colors=[cmap(ci)], linewidths=[1.8])
                 legend_handles.append(
-                    Line2D([0], [0], color=kappa_cmap(ci), lw=1.8,
-                           label=rf"$\kappa = {kappa}$")
+                    Line2D([0], [0], color=cmap(ci), lw=1.8,
+                           label=rf"{config.coupling_label} $= {coup_val}$")
                 )
             except Exception:
                 pass
@@ -239,27 +283,34 @@ def figure_overlay_kappa():
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(r"$m_{\pi_D}$  [GeV]")
-        ax.set_title(spec_label)
+        ax.set_ylabel(config.mediator_label)
         ax.legend(handles=legend_handles, fontsize=8, loc="upper left")
+        fig.tight_layout()
 
-    ax1.set_ylabel(r"$m_X$  [GeV]")
-    fig.tight_layout()
-    save_fig(fig, "ctau_contours_kappa_overlay.pdf")
+        pid_str = f"{s.pion_id[0]}{s.pion_id[1]}" if isinstance(s.pion_id, tuple) \
+                  else str(s.pion_id)
+        save_fig(fig, f"ctau_contours_coupling_overlay_{config.tag}_pion{pid_str}.pdf")
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+def main(config: ModelPlotConfig) -> None:
+    print(f"  Figure 1: (m_piD, mediator) plane ...")
+    figure_mpiD_mediator(config)
+
+    print(f"  Figure 2: (m_piD, coupling) plane ...")
+    figure_mpiD_coupling(config)
+
+    print(f"  Figure 3: (mediator, coupling) plane ...")
+    figure_mediator_coupling(config)
+
+    print(f"  Figure 4: coupling overlay ...")
+    figure_coupling_overlay(config)
+
+
 if __name__ == "__main__":
-    print("Figure 1: (m_piD, m_X) plane ...")
-    figure_mpiD_mX()
-
-    print("Figure 2: (m_piD, κ) plane ...")
-    figure_mpiD_kappa()
-
-    print("Figure 3: (m_X, κ) plane ...")
-    figure_mX_kappa()
-
-    print("Figure 4: κ-overlay on (m_piD, m_X) ...")
-    figure_overlay_kappa()
+    for cfg in ALL_CONFIGS:
+        print(f"\n--- {cfg.name} ---")
+        main(cfg)
