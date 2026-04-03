@@ -100,7 +100,7 @@ class DarkPionModel:
         Universal coupling κ applied to dark-flavor indices 0, 1, 2.
         Index 3 always has κ = 0 (SM singlet direction).
     Nc : int
-        Number of SM QCD colors (default 3).
+        Number of dark colours (default 3).
     quarks : dict, optional
         SM quark masses {label: mass_GeV}. Defaults to down-type {d, s, b}.
     """

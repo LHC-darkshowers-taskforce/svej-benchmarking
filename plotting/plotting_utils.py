@@ -1,20 +1,25 @@
 """
 plotting_utils.py
 -----------------
-Shared constants, style setup, and helpers for all dark-QCD plotting scripts.
+Shared style setup, data structures, and helpers for all dark-QCD plotting
+scripts.  Model-specific pion species and parameter names are encapsulated in
+ModelPlotConfig objects defined in model_config.py.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 import matplotlib.pyplot as plt
 import mplhep
 from matplotlib.lines import Line2D
 
-from dark_pion_widths import DIAGONAL_PION_NAMES
 
 # ---------------------------------------------------------------------------
 # Style
 # ---------------------------------------------------------------------------
 
-def apply_style():
+def apply_style() -> None:
     """Apply mplhep ATLAS style (no ATLAS label)."""
     mplhep.style.use("ATLAS")
 
@@ -27,63 +32,107 @@ def save_fig(fig, path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pion species — colors, labels, legend handles
+# Per-pion plot specification
 # ---------------------------------------------------------------------------
 
-# Off-diagonal dark pions
-OFF_DIAG_PAIRS  = [(0, 1), (0, 2), (1, 2)]
-OFF_DIAG_COLORS = {(0, 1): "tab:blue", (0, 2): "tab:orange", (1, 2): "tab:green"}
-OFF_DIAG_LABELS = {(a, b): rf"$\pi^{{({a},{b})}}$" for a, b in OFF_DIAG_PAIRS}
-
-# Diagonal dark pions
-DIAG_INDICES = [2, 7, 14]
-DIAG_COLORS  = {2: "tab:red", 7: "tab:purple", 14: "tab:brown"}
-DIAG_LABELS  = {b: rf"$\pi^{{\mathrm{{{DIAGONAL_PION_NAMES[b]}}}}}$"
-                for b in DIAG_INDICES}
-
-# Contour species descriptor: (key, label, linestyle, linewidth)
-CONTOUR_SPECIES = [
-    ("diag_14", r"$\pi^{T15}$",   "-",  1.8),
-    ("off_01",  r"$\pi^{(0,1)}$", "--", 1.6),
-    ("off_02",  r"$\pi^{(0,2)}$", ":",  1.8),
-]
-
-
-def species_legend_handles():
-    """Legend handles for all off-diagonal + diagonal pion species (1-D plots)."""
-    handles = [
-        Line2D([0], [0], color=OFF_DIAG_COLORS[p], ls="-", lw=1.8,
-               label=OFF_DIAG_LABELS[p])
-        for p in OFF_DIAG_PAIRS
-    ]
-    handles += [
-        Line2D([0], [0], color=DIAG_COLORS[b], ls="--", lw=1.8,
-               label=DIAG_LABELS[b])
-        for b in DIAG_INDICES
-    ]
-    return handles
-
-
-def contour_species_handles():
-    """Legend handles for the three contour species (solid/dashed/dotted)."""
-    return [
-        Line2D([0], [0], color="k", ls=ls, lw=lw, label=label)
-        for _, label, ls, lw in CONTOUR_SPECIES
-    ]
+@dataclass
+class PionSpec:
+    """Describes how to display one pion species in a plot."""
+    pion_id:   object        # (alpha, beta) tuple or int
+    label:     str           # LaTeX label, e.g. r"$\pi^{T15}$"
+    color:     str           # matplotlib color string
+    linestyle: str  = "-"
+    linewidth: float = 1.8
 
 
 # ---------------------------------------------------------------------------
-# c·τ contour levels — colors and labels
+# Per-model plot configuration
 # ---------------------------------------------------------------------------
 
-CTAU_LEVELS_MM = [1.0, 10.0, 100.0, 1000.0]
-CTAU_COLORS    = {1.0: "#e41a1c", 10.0: "#ff7f00", 100.0: "#377eb8", 1000.0: "#4daf4a"}
-CTAU_LABELS    = {v: rf"$c\tau = {v:.0f}$ mm" for v in CTAU_LEVELS_MM}
+@dataclass
+class ModelPlotConfig:
+    """
+    All metadata needed to run generic plotting functions for one model variant.
+
+    Attributes
+    ----------
+    name : str
+        Human-readable description, e.g. "T-channel (universal κ)".
+    tag : str
+        Short identifier used in output filenames, e.g. "tchannel_universal".
+    model_class : type
+        The model class to instantiate (DarkPionTChannelModel or
+        DarkPionSChannelModel).
+    base_params : dict
+        Default keyword arguments passed to model_class(...).
+    mediator_param : str
+        Name of the mediator mass parameter, e.g. "m_X" or "m_Zp".
+    mediator_label : str
+        LaTeX axis label for the mediator mass.
+    coupling_param : str
+        Name of the main coupling parameter, e.g. "kappa" or "g_qd".
+    coupling_label : str
+        LaTeX axis label for the coupling.
+    pion_specs : list[PionSpec]
+        Ordered list of decaying pion species to show in 1-D plots.
+    contour_pion_specs : list[PionSpec]
+        Subset of pion_specs used in contour/iso-lifetime plots (≤ 3 species).
+    """
+    name:                str
+    tag:                 str
+    model_class:         type
+    base_params:         dict
+    mediator_param:      str
+    mediator_label:      str
+    coupling_param:      str
+    coupling_label:      str
+    pion_specs:          list[PionSpec]
+    contour_pion_specs:  list[PionSpec] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.contour_pion_specs:
+            self.contour_pion_specs = self.pion_specs[:3]
 
 
-def ctau_legend_handles():
+# ---------------------------------------------------------------------------
+# c·τ contour levels — shared across all models
+# ---------------------------------------------------------------------------
+
+CTAU_LEVELS_MM: list[float] = [1.0, 10.0, 100.0, 1000.0]
+CTAU_COLORS:    dict[float, str] = {
+    1.0:    "#e41a1c",
+    10.0:   "#ff7f00",
+    100.0:  "#377eb8",
+    1000.0: "#4daf4a",
+}
+CTAU_LABELS: dict[float, str] = {v: rf"$c\tau = {v:.0f}$ mm" for v in CTAU_LEVELS_MM}
+
+
+def ctau_legend_handles() -> list:
     """Legend handles for the standard c·τ iso-contour levels."""
     return [
         Line2D([0], [0], color=CTAU_COLORS[v], lw=2, label=CTAU_LABELS[v])
         for v in CTAU_LEVELS_MM
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Generic species legend helpers
+# ---------------------------------------------------------------------------
+
+def species_legend_handles(pion_specs: list[PionSpec]) -> list:
+    """Legend handles for a list of PionSpec objects (1-D plots)."""
+    return [
+        Line2D([0], [0], color=s.color, ls=s.linestyle, lw=s.linewidth,
+               label=s.label)
+        for s in pion_specs
+    ]
+
+
+def contour_species_handles(contour_specs: list[PionSpec]) -> list:
+    """Legend handles for contour species, drawn in black with species linestyle."""
+    return [
+        Line2D([0], [0], color="k", ls=s.linestyle, lw=s.linewidth,
+               label=s.label)
+        for s in contour_specs
     ]
