@@ -19,10 +19,8 @@ Two panels per figure:
 
 S-channel plots
 ---------------
-Two panels per figure:
-  Left  — Decaying dark pion (all decaying species share the same BRs for
-           pure vector coupling; shown for pion index 6 as representative).
-  Right — Dark eta' (heavier: m_etap = 4π·fD).
+One panel per figure: decaying dark pion (all decaying species share the same
+BRs for pure vector coupling; shown for the first decaying pion index).
 """
 
 import numpy as np
@@ -176,7 +174,7 @@ _SM_QUARK_COLORS = {
 _FOUR_BODY_COLOR = "#762a83"
 
 
-def _collect_schan_brs(config, pion_index, m_piD_vals, is_etap=False):
+def _collect_schan_brs(config, pion_index, m_piD_vals):
     """Return {channel_key: np.ndarray of BR} for an s-channel pion."""
     ref_params = dict(config.base_params)
     # Determine quark order from a reference model
@@ -192,11 +190,7 @@ def _collect_schan_brs(config, pion_index, m_piD_vals, is_etap=False):
         params["fD"]    = mpiD
         params["m_piD"] = mpiD
         model = config.model_class(**params)
-
-        if is_etap:
-            info = model.compute_eta_prime()
-        else:
-            info = model.compute_pion(pion_index)
+        info  = model.compute_pion(pion_index)
 
         if info["total"] <= 0:
             continue
@@ -248,8 +242,7 @@ def plot_schannel_brs(config: ModelPlotConfig) -> None:
 
     rep_pion = config.pion_specs[0].pion_id if config.pion_specs else 6
 
-    # Decaying pion panel
-    br_pion, q_labels = _collect_schan_brs(config, rep_pion, m_piD_vals, is_etap=False)
+    br_pion, q_labels = _collect_schan_brs(config, rep_pion, m_piD_vals)
     fig1, ax1 = plt.subplots(figsize=(9, 5))
     fig1.suptitle(
         rf"Dark pion branching ratios vs $m_{{\pi_D}}$  ($f_D = m_{{\pi_D}}$)"
@@ -261,20 +254,6 @@ def plot_schannel_brs(config: ModelPlotConfig) -> None:
     ax1.set_ylabel("Branching ratio")
     fig1.tight_layout()
     save_fig(fig1, f"dark_pion_branching_ratios_{config.tag}_pion.pdf")
-
-    # Dark eta' panel
-    br_etap, _ = _collect_schan_brs(config, None, m_piD_vals, is_etap=True)
-    fig2, ax2  = plt.subplots(figsize=(9, 5))
-    fig2.suptitle(
-        rf"Dark $\eta'$ branching ratios vs $m_{{\pi_D}}$  ($m_{{\eta'}} = 4\pi f_D$)"
-        f"\n{config.name}"
-    )
-    _draw_schan_panel(ax2, br_etap, q_labels,
-                      r"Dark $\eta'$",
-                      m_piD_vals, masses)
-    ax2.set_ylabel("Branching ratio")
-    fig2.tight_layout()
-    save_fig(fig2, f"dark_pion_branching_ratios_{config.tag}_etap.pdf")
 
 
 # ---------------------------------------------------------------------------

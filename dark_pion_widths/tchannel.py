@@ -39,7 +39,7 @@ so existing benchmark results for T15 are unchanged.
 import numpy as np
 
 from .base import DarkPionModelBase, HBAR_C_GEV_MM
-from .generators import build_sun_generators, get_diagonal_indices, get_diagonal_names
+from .generators import build_sun_generators, get_diagonal_indices, get_diagonal_names, get_generator_label
 
 # ---------------------------------------------------------------------------
 # Default SM down-type quark masses (GeV)
@@ -321,6 +321,55 @@ class DarkPionTChannelModel(DarkPionModelBase):
             return rf"$\pi^{{({a},{b})}}$"
         name = self._diagonal_names.get(pion_id, f"T{pion_id + 1}")
         return rf"$\pi^{{\mathrm{{{name}}}}}$"
+
+    # ------------------------------------------------------------------
+    # Summary printer
+    # ------------------------------------------------------------------
+
+    def print_summary(self) -> None:
+        """Print a formatted summary of all dark pion properties."""
+        total_pions = self.Nf ** 2 - 1
+        results     = self.compute_all()
+        n_decaying  = len(results["off_diagonal"]) + len(results["diagonal"])
+
+        print("=" * 72)
+        print("  Dark Pion T-Channel Model Summary")
+        print("=" * 72)
+        print(f"  Nf = {self.Nf},  Nc = {self.Nc},  n_active = {self._n_active}")
+        print(f"  kappa_mode = {self.kappa_mode},  κ = {self.kappa.real:.6f}")
+        print(f"  fD = {self.fD:.2f} GeV,  m_piD = {self.m_piD:.2f} GeV,  "
+              f"m_X = {self.m_X:.1f} GeV")
+        print()
+        print(f"  Total dark pions: {total_pions}  (SU({self.Nf}) adjoint)")
+        print(f"    Decaying: {n_decaying}")
+        print()
+
+        print("-" * 72)
+        print(f"  {'Pion':>8}  {'Type':>12}  {'Gamma [GeV]':>12}  {'ctau [mm]':>12}")
+        print("-" * 72)
+
+        pairs = [(a, b) for a in range(self.Nf) for b in range(a + 1, self.Nf)]
+        for gen_idx, (a, b) in enumerate(pairs):
+            r     = self.compute_off_diagonal_pion(a, b)
+            label = get_generator_label(self.Nf, 2 * gen_idx)
+            if r["total"] > 0:
+                print(f"  {label:>8}  {'off-diagonal':>12}  "
+                      f"{r['total']:>12.3e}  {r['ctau_mm']:>12.3e}")
+            else:
+                print(f"  {label:>8}  {'off-diagonal':>12}  "
+                      f"{'stable':>12}  {'inf':>12}")
+
+        for b in self._diagonal_indices:
+            r     = self.compute_diagonal_pion(b)
+            label = get_generator_label(self.Nf, b)
+            if r["total"] > 0:
+                print(f"  {label:>8}  {'diagonal':>12}  "
+                      f"{r['total']:>12.3e}  {r['ctau_mm']:>12.3e}")
+            else:
+                print(f"  {label:>8}  {'diagonal':>12}  "
+                      f"{'stable':>12}  {'inf':>12}")
+
+        print("=" * 72)
 
     # ------------------------------------------------------------------
     # Static utility

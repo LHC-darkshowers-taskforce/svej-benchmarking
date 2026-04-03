@@ -28,7 +28,7 @@ from typing import Optional
 import numpy as np
 
 from .base import DarkPionModelBase, HBAR_C_GEV_MM
-from .generators import build_sun_generators, classify_generator
+from .generators import build_sun_generators, classify_generator, get_generator_label, get_diagonal_indices
 
 # ---------------------------------------------------------------------------
 # Physical constants
@@ -92,10 +92,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         Overall Z' coupling to dark quarks.
     g_q : float
         Overall Z' coupling to SM quarks.
-    m_etap : float or None
-        Dark eta' mass [GeV].  If None, estimated as 4π·fD.
-    f_etap : float or None
-        Dark eta' decay constant [GeV].  If None, set equal to fD.
     a_d : float
         Axial coupling component (0 = pure vector, 1 = pure axial).
     Nc : int
@@ -114,8 +110,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         m_Zp: float = 1000.0,
         g_qd: float = 0.3,
         g_q: float = 0.3,
-        m_etap: Optional[float] = None,
-        f_etap: Optional[float] = None,
         a_d: float = 0.0,
         Nc: int = 3,
         sm_quarks: Optional[dict] = None,
@@ -128,9 +122,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         self.g_qd = float(g_qd)
         self.g_q  = float(g_q)
         self.a_d  = float(a_d)
-
-        self.m_etap = float(m_etap) if m_etap is not None else 4.0 * np.pi * self.fD
-        self.f_etap = float(f_etap) if f_etap is not None else self.fD
 
         if dark_charges is None:
             dark_charges = [1.0] * Nf
@@ -167,11 +158,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         """Anomaly factor A^a for pion index a (0-indexed)."""
         return float(self._anomaly_factors[a])
 
-    def eta_prime_anomaly_factor(self) -> float:
-        """Anomaly factor for the dark eta' (flavor singlet)."""
-        T0 = np.eye(self.Nf, dtype=complex) / np.sqrt(2.0 * self.Nf)
-        return float(2.0 * np.real(np.trace(T0 @ self.charge_matrix_sq)))
-
     # ------------------------------------------------------------------
     # Anomaly-mediated two-body: π_d^a → q q̄
     # ------------------------------------------------------------------
@@ -207,30 +193,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         )
         return float(numerator / denominator * rho ** 2 * Fsq * beta)
 
-    def gamma_anom_2body_etap(self, q_idx: int) -> float:
-        """Partial width Γ(η'_d → q_i q̄_i) [GeV] via anomaly-mediated two-body."""
-        mq = self._q_masses[q_idx]
-        Ae = self.eta_prime_anomaly_factor()
-        if abs(Ae) < 1e-15 or 2 * mq >= self.m_etap:
-            return 0.0
-
-        r    = mq ** 2 / self.m_etap ** 2
-        Fsq  = loop_function_squared(r)
-        beta = np.sqrt(1.0 - 4.0 * r)
-        rho  = self.m_etap ** 2 / self.m_Zp ** 2
-
-        numerator = (
-            self.Nc * self.Nd ** 2 * self.g_qd ** 4 * Ae ** 2
-            * self.g_q ** 4 * mq ** 2 * self.m_etap
-        )
-        denominator = (
-            2.0 * np.pi
-            * (4.0 * np.pi ** 2) ** 2
-            * (16.0 * np.pi ** 2) ** 2
-            * self.f_etap ** 2
-        )
-        return float(numerator / denominator * rho ** 2 * Fsq * beta)
-
     # ------------------------------------------------------------------
     # Anomaly-mediated four-body: π_d^a → q q̄ q q̄  (parametric)
     # ------------------------------------------------------------------
@@ -248,23 +210,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
         denominator = (
             (4.0 * np.pi) ** 9
             * self.fD ** 2
-            * self.m_Zp ** 8
-        )
-        return float(numerator / denominator)
-
-    def gamma_anom_4body_etap(self) -> float:
-        """Parametric estimate of the total four-body width for the dark eta' [GeV]."""
-        Ae = self.eta_prime_anomaly_factor()
-        if abs(Ae) < 1e-15:
-            return 0.0
-        numerator = (
-            self.Nd ** 2 * Ae ** 2
-            * self.g_qd ** 4 * self.g_q ** 4
-            * self.m_etap ** 13
-        )
-        denominator = (
-            (4.0 * np.pi) ** 9
-            * self.f_etap ** 2
             * self.m_Zp ** 8
         )
         return float(numerator / denominator)
@@ -362,54 +307,17 @@ class DarkPionSChannelModel(DarkPionModelBase):
             "tau_s":             tau_s,
         }
 
-    def compute_eta_prime(self) -> dict:
-        """Compute decay widths for the dark eta'."""
-        Ae = self.eta_prime_anomaly_factor()
-
-        anom_2body: dict = {}
-        for qi in range(self._nq):
-            g = self.gamma_anom_2body_etap(qi)
-            if g > 0:
-                anom_2body[self._q_labels[qi]] = g
-
-        anom_4body = self.gamma_anom_4body_etap()
-        total      = sum(anom_2body.values()) + anom_4body
-
-        all_channels: dict = {}
-        for k, v in anom_2body.items():
-            all_channels[f"anom_2body_{k}"] = v
-        if anom_4body > 0:
-            all_channels["anom_4body"] = anom_4body
-
-        br      = {k: v / total for k, v in all_channels.items()} if total > 0 else {}
-        ctau_mm = HBAR_C_GEV_MM / total if total > 0 else np.inf
-        tau_s   = HBAR_GEV_S   / total if total > 0 else np.inf
-
-        return {
-            "name":            "eta_prime",
-            "anomaly_factor":  Ae,
-            "anomaly_factor_sq": Ae ** 2,
-            "mass":            self.m_etap,
-            "f_decay":         self.f_etap,
-            "anom_2body":      anom_2body,
-            "anom_4body":      anom_4body,
-            "total":           total,
-            "br":              br,
-            "ctau_mm":         ctau_mm,
-            "tau_s":           tau_s,
-        }
-
     # ------------------------------------------------------------------
     # Full model scan
     # ------------------------------------------------------------------
 
     def compute_all(self) -> dict:
         """
-        Compute widths, BRs, and lifetimes for every dark pion and the eta'.
+        Compute widths, BRs, and lifetimes for every dark pion.
 
         Returns
         -------
-        dict with keys: pions, eta_prime, model_params, classification.
+        dict with keys: pions, model_params, classification.
         """
         pions: dict = {}
         n_decaying = n_stable_diag = n_stable_offdiag = 0
@@ -423,8 +331,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
                 n_stable_diag += 1
             else:
                 n_stable_offdiag += 1
-
-        eta = self.compute_eta_prime()
 
         classification = {
             "total_pions":         self._n_pions,
@@ -445,13 +351,11 @@ class DarkPionSChannelModel(DarkPionModelBase):
             "g_qd":        self.g_qd,
             "g_q":         self.g_q,
             "a_d":         self.a_d,
-            "m_etap":      self.m_etap,
             "Nc":          self.Nc,
         }
 
         return {
             "pions":          pions,
-            "eta_prime":      eta,
             "model_params":   model_params,
             "classification": classification,
         }
@@ -509,38 +413,39 @@ class DarkPionSChannelModel(DarkPionModelBase):
         print(f"  g_qd = {params['g_qd']:.3f},  g_q = {params['g_q']:.3f}")
         if params["a_d"] > 0:
             print(f"  Axial coupling a_d = {params['a_d']:.3f}")
-        print(f"  m_eta' = {params['m_etap']:.2f} GeV")
         print()
         print(f"  Total dark pions: {clf['total_pions']}")
         print(f"    Decaying: {clf['n_decaying']}")
         print()
 
         print("-" * 72)
-        print(f"  {'Pion':>6}  {'Type':>12}  {'A^a':>8}  "
+        print(f"  {'Pion':>8}  {'Type':>12}  {'A^a':>8}  "
               f"{'Gamma [GeV]':>12}  {'ctau [mm]':>12}")
         print("-" * 72)
 
-        for a in range(clf["total_pions"]):
-            info     = results["pions"][a]
-            Aa       = info["anomaly_factor"]
-            total    = info["total"]
-            ctau     = info["ctau_mm"]
-            gen_type = info["gen_type"]
-            if total > 0:
-                print(f"  {a:>6}  {gen_type:>12}  {Aa:>8.4f}  "
-                      f"{total:>12.3e}  {ctau:>12.3e}")
+        Nf = params["Nf"]
+        # Off-diagonal: one row per pair (even generator indices)
+        for gen_idx in range(0, Nf * (Nf - 1), 2):
+            info  = results["pions"][gen_idx]
+            label = get_generator_label(Nf, gen_idx)
+            Aa    = info["anomaly_factor"]
+            if info["total"] > 0:
+                print(f"  {label:>8}  {'off-diagonal':>12}  {Aa:>8.4f}  "
+                      f"{info['total']:>12.3e}  {info['ctau_mm']:>12.3e}")
             else:
-                print(f"  {a:>6}  {gen_type:>12}  {Aa:>8.4f}  "
+                print(f"  {label:>8}  {'off-diagonal':>12}  {Aa:>8.4f}  "
                       f"{'stable':>12}  {'inf':>12}")
 
-        eta = results["eta_prime"]
-        print()
-        print("-" * 72)
-        print(f"  Dark eta':  A = {eta['anomaly_factor']:.4f},  "
-              f"m = {eta['mass']:.2f} GeV")
-        if eta["total"] > 0:
-            print(f"    Gamma = {eta['total']:.3e} GeV,  "
-                  f"ctau = {eta['ctau_mm']:.3e} mm")
-        else:
-            print(f"    Stable (zero anomaly coupling)")
+        # Diagonal: one row per generator
+        for gen_idx in get_diagonal_indices(Nf):
+            info  = results["pions"][gen_idx]
+            label = get_generator_label(Nf, gen_idx)
+            Aa    = info["anomaly_factor"]
+            if info["total"] > 0:
+                print(f"  {label:>8}  {'diagonal':>12}  {Aa:>8.4f}  "
+                      f"{info['total']:>12.3e}  {info['ctau_mm']:>12.3e}")
+            else:
+                print(f"  {label:>8}  {'diagonal':>12}  {Aa:>8.4f}  "
+                      f"{'stable':>12}  {'inf':>12}")
+
         print("=" * 72)

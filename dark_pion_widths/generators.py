@@ -85,6 +85,31 @@ def get_diagonal_indices(Nf: int) -> list[int]:
     return list(range(n_off, Nf ** 2 - 1))
 
 
+def get_generator_label(Nf: int, a: int) -> str:
+    """
+    Return a human-readable label for generator index *a* of SU(Nf).
+
+    Off-diagonal generators are labelled by their (j,k) dark-flavor pair.
+    Both generators of a pair (symmetric and antisymmetric) share the same label.
+
+    Diagonal generators are labelled by their conventional name (T3, T8, T15).
+
+    Examples
+    --------
+    >>> get_generator_label(3, 0)
+    '(0,1)'
+    >>> get_generator_label(3, 6)
+    'T3'
+    """
+    n_off = Nf * (Nf - 1)
+    if a < n_off:
+        pairs = [(j, k) for j in range(Nf) for k in range(j + 1, Nf)]
+        j, k = pairs[a // 2]
+        return f"({j},{k})"
+    diag_names = get_diagonal_names(Nf)
+    return diag_names.get(a, f"T{a + 1}")
+
+
 def get_diagonal_names(Nf: int) -> dict[int, str]:
     """
     Map generator list index → conventional physics name for diagonal pions.
