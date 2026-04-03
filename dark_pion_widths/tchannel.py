@@ -331,7 +331,7 @@ class DarkPionTChannelModel(DarkPionModelBase):
         print("=" * 72)
         print("  Dark Pion T-Channel Model Summary")
         print("=" * 72)
-        print(f"  Nf = {self.Nf},  Nc = {self.Nc},  n_active = {self._n_active}")
+        print(f"  Nf = {self.Nf},  Nd = {self.Nd},  Nc = {self.Nc},  n_active = {self._n_active}")
         print(f"  kappa_mode = {self.kappa_mode},  κ = {self.kappa.real:.6f}")
         print(f"  fD = {self.fD:.2f} GeV,  m_piD = {self.m_piD:.2f} GeV,  "
               f"m_X = {self.m_X:.1f} GeV")
