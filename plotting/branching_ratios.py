@@ -122,7 +122,7 @@ def plot_tchannel_brs(config: ModelPlotConfig) -> None:
     ref   = dict(config.base_params)
     ref["fD"] = ref["m_piD"] = 10.0
     model_ref = config.model_class(**ref)
-    quarks    = model_ref._labels
+    quarks    = model_ref._q_labels
 
     diag_ids  = [s.pion_id for s in config.pion_specs if isinstance(s.pion_id, int)]
     od_ids    = [s.pion_id for s in config.pion_specs if isinstance(s.pion_id, tuple)]
@@ -150,7 +150,7 @@ def plot_tchannel_brs(config: ModelPlotConfig) -> None:
         _draw_tchan_panel(ax, br_data, m_piD_vals, title, quarks, combined_labels=combined)
 
         # Threshold markers
-        masses = dict(zip(quarks, model_ref._masses))
+        masses = dict(zip(quarks, model_ref._q_masses))
         if "b" in masses:
             mb = masses["b"]
             ax.axvline(2 * mb, color="gray", lw=1.2, ls="--", alpha=0.8)
@@ -190,7 +190,7 @@ def _collect_schan_brs(config, pion_index, m_piD_vals):
         params["fD"]    = mpiD
         params["m_piD"] = mpiD
         model = config.model_class(**params)
-        info  = model.compute_pion(pion_index)
+        info  = model.compute_diagonal_pion(pion_index)
 
         if info["total"] <= 0:
             continue

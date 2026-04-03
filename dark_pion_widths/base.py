@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 HBAR_C_GEV_MM = 1.973269788e-13   # ℏc  in GeV·mm
+HBAR_GEV_S    = 6.582119569e-25   # ℏ   in GeV·s
 
 
 class DarkPionModelBase(ABC):
@@ -23,16 +24,40 @@ class DarkPionModelBase(ABC):
         Dark pion decay constant [GeV].
     m_piD : float
         Dark pion mass [GeV].
+    Nf : int
+        Number of dark quark flavors (SU(Nf) dark flavor group).
+    Nd : int
+        Number of dark colours in the dark gauge group SU(Nd).  Default 3.
     Nc : int
-        Number of dark colours (default 3).
+        Number of SM colours (default 3).
+    sm_quarks : dict
+        SM quark masses {label: mass_GeV}.  Must be provided by the subclass.
     """
 
     HBAR_C_GEV_MM: float = HBAR_C_GEV_MM
+    HBAR_GEV_S:    float = HBAR_GEV_S
 
-    def __init__(self, fD: float, m_piD: float, Nc: int = 3) -> None:
+    def __init__(
+        self,
+        fD: float,
+        m_piD: float,
+        Nf: int,
+        Nd: int = 3,
+        Nc: int = 3,
+        sm_quarks: dict | None = None,
+    ) -> None:
         self.fD    = float(fD)
         self.m_piD = float(m_piD)
+        self.Nf    = int(Nf)
+        self.Nd    = int(Nd)
         self.Nc    = int(Nc)
+
+        if sm_quarks is None:
+            raise ValueError("sm_quarks must be provided by the subclass")
+        self.sm_quarks  = dict(sm_quarks)
+        self._q_labels  = list(self.sm_quarks.keys())
+        self._q_masses  = np.array(list(self.sm_quarks.values()), dtype=float)
+        self._nq        = len(self._q_masses)
 
     # ------------------------------------------------------------------
     # Abstract interface
@@ -43,8 +68,12 @@ class DarkPionModelBase(ABC):
         """
         Compute widths, branching ratios, and lifetimes for every dark pion.
 
-        Returns a model-specific dict; callers should use the generic
-        accessors below rather than parsing this dict directly.
+        Returns
+        -------
+        dict with keys:
+            off_diagonal : {(alpha, beta): summary_dict}  — decaying pairs only
+            diagonal     : {b: summary_dict}              — decaying diagonal only
+            quark_labels : list[str]
         """
         ...
 
@@ -53,9 +82,8 @@ class DarkPionModelBase(ABC):
         """
         Return the list of pion identifiers that have non-zero total width.
 
-        T-channel: tuples (alpha, beta) for off-diagonal pions and ints b
-                   for diagonal pions.
-        S-channel: ints 0 .. Nf^2 - 2 (generator index).
+        Both models: tuples (alpha, beta) for off-diagonal pions,
+                     ints b (generator index) for diagonal pions.
         """
         ...
 
@@ -67,6 +95,11 @@ class DarkPionModelBase(ABC):
     @abstractmethod
     def pion_label(self, pion_id) -> str:
         """Return a LaTeX label string for the given pion."""
+        ...
+
+    @abstractmethod
+    def print_summary(self) -> None:
+        """Print a formatted summary of all dark pion properties."""
         ...
 
     # ------------------------------------------------------------------

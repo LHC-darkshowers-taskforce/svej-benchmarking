@@ -71,7 +71,7 @@ class DarkPionTChannelModel(DarkPionModelBase):
         One of 'universal', 'diagonal', 'down_only'.  See module docstring.
     Nc : int
         Number of dark colours (default 3).
-    quarks : dict, optional
+    sm_quarks : dict, optional
         SM quark masses {label: mass_GeV}.  Defaults to {d, s, b}.
     """
 
@@ -83,25 +83,21 @@ class DarkPionTChannelModel(DarkPionModelBase):
         kappa: complex = 1.0 + 0j,
         Nf: int = 4,
         kappa_mode: str = "universal",
+        Nd: int = 3,
         Nc: int = 3,
-        quarks: dict | None = None,
+        sm_quarks: dict | None = None,
     ) -> None:
-        super().__init__(fD=fD, m_piD=m_piD, Nc=Nc)
+        resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_QUARKS)
+        super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc, sm_quarks=resolved_quarks)
 
-        self.m_X       = float(m_X)
-        self.kappa     = complex(kappa)
-        self.Nf        = int(Nf)
+        self.m_X        = float(m_X)
+        self.kappa      = complex(kappa)
         self.kappa_mode = str(kappa_mode)
 
         if self.kappa_mode not in _KAPPA_MODES:
             raise ValueError(
                 f"kappa_mode must be one of {_KAPPA_MODES}, got '{kappa_mode}'"
             )
-
-        self.quarks  = dict(quarks) if quarks is not None else dict(DEFAULT_QUARKS)
-        self._labels = list(self.quarks.keys())
-        self._masses = np.array(list(self.quarks.values()), dtype=float)
-        self._nq     = len(self._masses)
 
         # Number of active dark flavors that can couple to SM quarks.
         # Rows n_active .. Nf-1 of the κ matrix are identically zero.
@@ -171,12 +167,12 @@ class DarkPionTChannelModel(DarkPionModelBase):
         """
         if alpha >= self.Nf or beta >= self.Nf:
             return 0.0
-        Omega = self._omega(self._masses[i], self._masses[j])
+        Omega = self._omega(self._q_masses[i], self._q_masses[j])
         if Omega == 0.0:
             return 0.0
         pref  = self.Nc * self.fD ** 2 * self.m_piD / (128 * np.pi * self.m_X ** 4)
         kcoef = self._kmat[alpha, i] * np.conj(self._kmat[beta, j])
-        return float(pref * abs(kcoef) ** 2 * (self._masses[i] ** 2 + self._masses[j] ** 2) * Omega)
+        return float(pref * abs(kcoef) ** 2 * (self._q_masses[i] ** 2 + self._q_masses[j] ** 2) * Omega)
 
     def gamma_diag(self, b: int, i: int, j: int) -> float:
         """
@@ -192,11 +188,11 @@ class DarkPionTChannelModel(DarkPionModelBase):
         for alpha in range(self.Nf):
             for beta in range(self.Nf):
                 amp += self._kmat[alpha, i] * np.conj(self._kmat[beta, j]) * T[alpha, beta]
-        Omega = self._omega(self._masses[i], self._masses[j])
+        Omega = self._omega(self._q_masses[i], self._q_masses[j])
         if Omega == 0.0:
             return 0.0
         pref = self.Nc * self.fD ** 2 * self.m_piD / (64 * np.pi * self.m_X ** 4)
-        return float(pref * abs(amp) ** 2 * (self._masses[i] ** 2 + self._masses[j] ** 2) * Omega)
+        return float(pref * abs(amp) ** 2 * (self._q_masses[i] ** 2 + self._q_masses[j] ** 2) * Omega)
 
     # ------------------------------------------------------------------
     # Per-pion summaries
@@ -278,7 +274,7 @@ class DarkPionTChannelModel(DarkPionModelBase):
         return {
             "off_diagonal": off_diag,
             "diagonal":     diag,
-            "quark_labels": self._labels,
+            "quark_labels": self._q_labels,
         }
 
     # ------------------------------------------------------------------
@@ -296,8 +292,8 @@ class DarkPionTChannelModel(DarkPionModelBase):
     def channel_label(self, i: int, j: int) -> str:
         """Human-readable LaTeX label for the SM quark decay channel (i, j)."""
         if i == j:
-            return rf"${self._labels[i]}\bar{{{self._labels[i]}}}$"
-        return rf"${self._labels[i]}\bar{{{self._labels[j]}}}$"
+            return rf"${self._q_labels[i]}\bar{{{self._q_labels[i]}}}$"
+        return rf"${self._q_labels[i]}\bar{{{self._q_labels[j]}}}$"
 
     # ------------------------------------------------------------------
     # Base-class interface
@@ -371,11 +367,3 @@ class DarkPionTChannelModel(DarkPionModelBase):
 
         print("=" * 72)
 
-    # ------------------------------------------------------------------
-    # Static utility
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def width_to_ctau_mm(width_GeV: float) -> float:
-        """Convert a width in GeV to c·τ in mm."""
-        return HBAR_C_GEV_MM / width_GeV if width_GeV > 0 else np.inf

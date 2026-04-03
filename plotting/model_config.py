@@ -94,7 +94,7 @@ TCHANNEL_DIAGONAL = ModelPlotConfig(
     tag               = "tchannel_diagonal",
     model_class       = DarkPionTChannelModel,
     base_params       = dict(fD=10.0, m_piD=10.0, m_X=2000.0, kappa=1.0,
-                             Nf=3, kappa_mode="diagonal"),
+                             Nf=4, kappa_mode="diagonal"),
     mediator_param    = "m_X",
     mediator_label    = r"$m_X$  [GeV]",
     coupling_param    = "kappa",

@@ -31,11 +31,6 @@ from .base import DarkPionModelBase, HBAR_C_GEV_MM
 from .generators import build_sun_generators, classify_generator, get_generator_label, get_diagonal_indices
 
 # ---------------------------------------------------------------------------
-# Physical constants
-# ---------------------------------------------------------------------------
-HBAR_GEV_S = 6.582119569e-25      # ℏ in GeV·s
-
-# ---------------------------------------------------------------------------
 # Default SM quark masses (GeV) — all six flavors
 # ---------------------------------------------------------------------------
 DEFAULT_SM_QUARKS: dict[str, float] = {
@@ -114,29 +109,23 @@ class DarkPionSChannelModel(DarkPionModelBase):
         Nc: int = 3,
         sm_quarks: Optional[dict] = None,
     ) -> None:
-        super().__init__(fD=fD, m_piD=m_piD, Nc=Nc)
+        resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_SM_QUARKS)
+        super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc, sm_quarks=resolved_quarks)
 
-        self.Nf   = int(Nf)
-        self.Nd   = int(Nd)
         self.m_Zp = float(m_Zp)
         self.g_qd = float(g_qd)
         self.g_q  = float(g_q)
         self.a_d  = float(a_d)
 
         if dark_charges is None:
-            dark_charges = [1.0] * Nf
-        if len(dark_charges) != Nf:
+            dark_charges = [1.0] * self.Nf
+        if len(dark_charges) != self.Nf:
             raise ValueError(
-                f"dark_charges must have length Nf={Nf}, got {len(dark_charges)}"
+                f"dark_charges must have length Nf={self.Nf}, got {len(dark_charges)}"
             )
-        self.dark_charges    = np.array(dark_charges, dtype=float)
-        self.charge_matrix   = np.diag(self.dark_charges)
+        self.dark_charges     = np.array(dark_charges, dtype=float)
+        self.charge_matrix    = np.diag(self.dark_charges)
         self.charge_matrix_sq = np.diag(self.dark_charges ** 2)
-
-        self.sm_quarks  = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_SM_QUARKS)
-        self._q_labels  = list(self.sm_quarks.keys())
-        self._q_masses  = np.array(list(self.sm_quarks.values()), dtype=float)
-        self._nq        = len(self._q_masses)
 
         self._generators   = build_sun_generators(self.Nf)
         self._n_pions      = self.Nf ** 2 - 1
@@ -240,22 +229,14 @@ class DarkPionSChannelModel(DarkPionModelBase):
     # Per-pion summaries
     # ------------------------------------------------------------------
 
-    def _summarise(self, channels: dict, total_override: Optional[float] = None) -> dict:
-        total   = total_override if total_override is not None else sum(channels.values())
-        br      = {k: v / total for k, v in channels.items()} if total > 0 else {}
-        ctau_mm = HBAR_C_GEV_MM / total if total > 0 else np.inf
-        tau_s   = HBAR_GEV_S   / total if total > 0 else np.inf
-        return {"channels": channels, "total": total, "br": br,
-                "ctau_mm": ctau_mm, "tau_s": tau_s}
-
-    def compute_pion(self, a: int) -> dict:
+    def _compute_pion(self, a: int) -> dict:
         """
-        Compute all decay widths for dark pion π_d^a.
+        Compute all decay widths for dark pion with generator index a.
 
         Returns a dict with keys:
             generator_index, gen_type, anomaly_factor, anomaly_factor_sq,
             anom_2body, anom_4body, tree_level,
-            total_anom_2body, total_tree, total, br, ctau_mm, tau_s.
+            total_anom_2body, total_tree, total, br, ctau_mm.
         """
         Aa       = self._anomaly_factors[a]
         gen_type = self._gen_types[a]
@@ -289,7 +270,6 @@ class DarkPionSChannelModel(DarkPionModelBase):
 
         br      = {k: v / total for k, v in all_channels.items()} if total > 0 else {}
         ctau_mm = HBAR_C_GEV_MM / total if total > 0 else np.inf
-        tau_s   = HBAR_GEV_S   / total if total > 0 else np.inf
 
         return {
             "generator_index":   a,
@@ -304,8 +284,21 @@ class DarkPionSChannelModel(DarkPionModelBase):
             "total":             total,
             "br":                br,
             "ctau_mm":           ctau_mm,
-            "tau_s":             tau_s,
         }
+
+    # ------------------------------------------------------------------
+    # Per-pion public interface (mirrors t-channel naming)
+    # ------------------------------------------------------------------
+
+    def compute_diagonal_pion(self, b: int) -> dict:
+        """Widths, BRs, and lifetime for diagonal pion with generator index b."""
+        return self._compute_pion(b)
+
+    def compute_off_diagonal_pion(self, alpha: int, beta: int) -> dict:
+        """Widths, BRs, and lifetime for off-diagonal pion π^(α,β)."""
+        pairs   = [(j, k) for j in range(self.Nf) for k in range(j + 1, self.Nf)]
+        gen_idx = 2 * pairs.index((alpha, beta))
+        return self._compute_pion(gen_idx)
 
     # ------------------------------------------------------------------
     # Full model scan
@@ -317,81 +310,64 @@ class DarkPionSChannelModel(DarkPionModelBase):
 
         Returns
         -------
-        dict with keys: pions, model_params, classification.
+        dict with keys:
+            off_diagonal : {(alpha, beta): summary_dict}  — decaying pairs only
+            diagonal     : {b: summary_dict}              — decaying diagonal only
+            quark_labels : list[str]
         """
-        pions: dict = {}
-        n_decaying = n_stable_diag = n_stable_offdiag = 0
+        off_diag: dict = {}
+        pairs = [(j, k) for j in range(self.Nf) for k in range(j + 1, self.Nf)]
+        for j, k in pairs:
+            r = self.compute_off_diagonal_pion(j, k)
+            if r["total"] > 0:
+                off_diag[(j, k)] = r
 
-        for a in range(self._n_pions):
-            info  = self.compute_pion(a)
-            pions[a] = info
-            if info["total"] > 0:
-                n_decaying += 1
-            elif info["gen_type"] == "diagonal":
-                n_stable_diag += 1
-            else:
-                n_stable_offdiag += 1
-
-        classification = {
-            "total_pions":         self._n_pions,
-            "n_diagonal":          sum(1 for t in self._gen_types if t == "diagonal"),
-            "n_off_diagonal":      sum(1 for t in self._gen_types if t == "off-diagonal"),
-            "n_decaying":          n_decaying,
-            "n_stable_diagonal":   n_stable_diag,
-            "n_stable_off_diagonal": n_stable_offdiag,
-        }
-
-        model_params = {
-            "Nf":          self.Nf,
-            "Nd":          self.Nd,
-            "dark_charges": self.dark_charges.tolist(),
-            "fD":          self.fD,
-            "m_piD":       self.m_piD,
-            "m_Zp":        self.m_Zp,
-            "g_qd":        self.g_qd,
-            "g_q":         self.g_q,
-            "a_d":         self.a_d,
-            "Nc":          self.Nc,
-        }
+        diag: dict = {}
+        for b in get_diagonal_indices(self.Nf):
+            r = self.compute_diagonal_pion(b)
+            if r["total"] > 0:
+                diag[b] = r
 
         return {
-            "pions":          pions,
-            "model_params":   model_params,
-            "classification": classification,
+            "off_diagonal": off_diag,
+            "diagonal":     diag,
+            "quark_labels": self._q_labels,
         }
 
     # ------------------------------------------------------------------
-    # Convenience accessors
+    # Convenience accessors (mirrors t-channel naming)
     # ------------------------------------------------------------------
 
-    def ctau_mm(self, a: int) -> float:
-        """c·τ [mm] for pion index a."""
-        return self.compute_pion(a)["ctau_mm"]
+    def ctau_diag_mm(self, b: int) -> float:
+        """c·τ [mm] for diagonal pion with generator index b."""
+        return self.compute_diagonal_pion(b)["ctau_mm"]
 
-    def tau_s(self, a: int) -> float:
-        """Lifetime [s] for pion index a."""
-        return self.compute_pion(a)["tau_s"]
+    def ctau_off_diag_mm(self, alpha: int, beta: int) -> float:
+        """c·τ [mm] for off-diagonal pion π^(α,β)."""
+        return self.compute_off_diagonal_pion(alpha, beta)["ctau_mm"]
 
     # ------------------------------------------------------------------
     # Base-class interface
     # ------------------------------------------------------------------
 
     def get_pion_ids(self) -> list:
-        """Return pion indices with non-zero total width."""
+        """Return pion IDs with non-zero total width (tuples then ints)."""
         results = self.compute_all()
-        return [a for a, info in results["pions"].items() if info["total"] > 0]
+        return list(results["off_diagonal"].keys()) + list(results["diagonal"].keys())
 
     def ctau_for_pion(self, pion_id) -> float:
-        """c·τ [mm] for pion_id (generator index a)."""
-        return self.ctau_mm(int(pion_id))
+        """c·τ [mm] — tuple (α,β) for off-diagonal, int b for diagonal."""
+        if isinstance(pion_id, tuple):
+            return self.ctau_off_diag_mm(*pion_id)
+        return self.ctau_diag_mm(int(pion_id))
 
     def pion_label(self, pion_id) -> str:
-        """LaTeX label for pion_id based on its generator type and anomaly factor."""
-        a        = int(pion_id)
-        gen_type = self._gen_types[a]
-        if gen_type == "diagonal":
-            return rf"$\pi_D^{{({a})}}$"
-        return rf"$\pi_D^{{({a})}}$"
+        """LaTeX label for pion_id."""
+        if isinstance(pion_id, tuple):
+            a, b = pion_id
+            return rf"$\pi^{{({a},{b})}}$"
+        label = get_generator_label(self.Nf, int(pion_id))
+        return rf"$\pi^{{\mathrm{{{label}}}}}$"
 
     # ------------------------------------------------------------------
     # Summary printer
@@ -399,23 +375,23 @@ class DarkPionSChannelModel(DarkPionModelBase):
 
     def print_summary(self) -> None:
         """Print a formatted summary of all dark pion properties."""
-        results = self.compute_all()
-        params  = results["model_params"]
-        clf     = results["classification"]
+        total_pions = self.Nf ** 2 - 1
+        results     = self.compute_all()
+        n_decaying  = len(results["off_diagonal"]) + len(results["diagonal"])
 
         print("=" * 72)
         print("  Dark Pion S-Channel (Z') Model Summary")
         print("=" * 72)
-        print(f"  Nf = {params['Nf']},  Nd = {params['Nd']},  Nc = {params['Nc']}")
-        print(f"  Dark charges: {params['dark_charges']}")
-        print(f"  fD = {params['fD']:.2f} GeV,  m_piD = {params['m_piD']:.2f} GeV")
-        print(f"  m_Z' = {params['m_Zp']:.1f} GeV")
-        print(f"  g_qd = {params['g_qd']:.3f},  g_q = {params['g_q']:.3f}")
-        if params["a_d"] > 0:
-            print(f"  Axial coupling a_d = {params['a_d']:.3f}")
+        print(f"  Nf = {self.Nf},  Nd = {self.Nd},  Nc = {self.Nc}")
+        print(f"  Dark charges: {self.dark_charges.tolist()}")
+        print(f"  fD = {self.fD:.2f} GeV,  m_piD = {self.m_piD:.2f} GeV")
+        print(f"  m_Z' = {self.m_Zp:.1f} GeV")
+        print(f"  g_qd = {self.g_qd:.3f},  g_q = {self.g_q:.3f}")
+        if self.a_d > 0:
+            print(f"  Axial coupling a_d = {self.a_d:.3f}")
         print()
-        print(f"  Total dark pions: {clf['total_pions']}")
-        print(f"    Decaying: {clf['n_decaying']}")
+        print(f"  Total dark pions: {total_pions}  (SU({self.Nf}) adjoint)")
+        print(f"    Decaying: {n_decaying}")
         print()
 
         print("-" * 72)
@@ -423,11 +399,10 @@ class DarkPionSChannelModel(DarkPionModelBase):
               f"{'Gamma [GeV]':>12}  {'ctau [mm]':>12}")
         print("-" * 72)
 
-        Nf = params["Nf"]
-        # Off-diagonal: one row per pair (even generator indices)
-        for gen_idx in range(0, Nf * (Nf - 1), 2):
-            info  = results["pions"][gen_idx]
-            label = get_generator_label(Nf, gen_idx)
+        pairs = [(j, k) for j in range(self.Nf) for k in range(j + 1, self.Nf)]
+        for gen_idx, (j, k) in enumerate(pairs):
+            info  = self.compute_off_diagonal_pion(j, k)
+            label = get_generator_label(self.Nf, 2 * gen_idx)
             Aa    = info["anomaly_factor"]
             if info["total"] > 0:
                 print(f"  {label:>8}  {'off-diagonal':>12}  {Aa:>8.4f}  "
@@ -436,10 +411,9 @@ class DarkPionSChannelModel(DarkPionModelBase):
                 print(f"  {label:>8}  {'off-diagonal':>12}  {Aa:>8.4f}  "
                       f"{'stable':>12}  {'inf':>12}")
 
-        # Diagonal: one row per generator
-        for gen_idx in get_diagonal_indices(Nf):
-            info  = results["pions"][gen_idx]
-            label = get_generator_label(Nf, gen_idx)
+        for b in get_diagonal_indices(self.Nf):
+            info  = self.compute_diagonal_pion(b)
+            label = get_generator_label(self.Nf, b)
             Aa    = info["anomaly_factor"]
             if info["total"] > 0:
                 print(f"  {label:>8}  {'diagonal':>12}  {Aa:>8.4f}  "
