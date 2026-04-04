@@ -5,7 +5,7 @@ from .generators import (
     get_diagonal_indices,
     get_diagonal_names,
 )
-from .tchannel import DarkPionTChannelModel, DEFAULT_QUARKS
+from .tchannel import DarkPionTChannelModel, DarkPionTChannelFlavourModel, DEFAULT_QUARKS
 from .schannel import DarkPionSChannelModel, DEFAULT_SM_QUARKS, loop_function_squared
 
 # Updated constants for Nf = 4 (new generator ordering)

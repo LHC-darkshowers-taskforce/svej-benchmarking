@@ -43,7 +43,7 @@ _QUARK_PDG = {0: 1, 1: 3, 2: 5}
 # Off-diagonal dark pion (alpha, beta) → Pythia PDG  (decaying species)
 _OFFDIAG_PDG = {(0, 1): 4900211, (0, 2): 4900311, (1, 2): 4900321}
 
-# Stable off-diagonal dark pions (involve dark flavor 3, which has κ=0)
+# Stable off-diagonal dark pions (involve dark flavor 4, which has κ=0)
 _STABLE_OFFDIAG_PDG = [4900411, 4900421, 4900431]
 
 # Diagonal dark pion generator index → Pythia PDG
@@ -74,8 +74,8 @@ _MEDIATOR_PDG = 4900001
 
 _SPECIES_GETTERS = {
     "T15":   lambda m: m.ctau_diag_mm(14),
-    "T8":    lambda m: m.ctau_diag_mm(13),   # new generator ordering
-    "T3":    lambda m: m.ctau_diag_mm(12),   # new generator ordering
+    "T8":    lambda m: m.ctau_diag_mm(13),
+    "T3":    lambda m: m.ctau_diag_mm(12),
     "(0,1)": lambda m: m.ctau_off_diag_mm(0, 1),
     "(0,2)": lambda m: m.ctau_off_diag_mm(0, 2),
     "(1,2)": lambda m: m.ctau_off_diag_mm(1, 2),
@@ -92,7 +92,8 @@ def solve_kappa(fD: float, mPiD: float, mXd: float, ctau_target: float,
         raise ValueError(f"Unknown species '{species}'. "
                          f"Choose from: {list(_SPECIES_GETTERS)}")
     ref_model = DarkPionTChannelModel(
-        fD=fD, m_piD=mPiD, m_X=mXd, kappa=1.0, kappa_mode=kappa_mode
+        fD=fD, m_piD=mPiD, m_X=mXd, kappa=1.0,
+        kappa_mode=kappa_mode,
     )
     ctau_ref = _SPECIES_GETTERS[species](ref_model)
     if not np.isfinite(ctau_ref) or ctau_ref <= 0:
@@ -239,59 +240,98 @@ DECAY 4900001 Auto # WidthX
         f.write(content)
 
 
+def _build_med_channels(model: "DarkPionTChannelModel") -> list:
+    """
+    Return [(br, sm_pdg, dark_pdg), ...] for the active X → SM_q + dark_q
+    channels, with equal BRs, driven by kappa_mode.
+    """
+    sm_qs   = [1, 3, 5]          # d, s, b PDG codes
+    dark_qs = [4900101, 4900102, 4900103]
+    k       = model.kappa.real
+    if model.kappa_mode == "universal":
+        pairs = [(sq, dq) for sq in sm_qs for dq in dark_qs]
+    elif model.kappa_mode == "diagonal":
+        pairs = list(zip(sm_qs, dark_qs))
+    elif model.kappa_mode == "down_only":
+        pairs = [(1, dq) for dq in dark_qs]   # d quark only
+    else:
+        pairs = [(sq, dq) for sq in sm_qs for dq in dark_qs]
+    br = 1.0 / len(pairs) if pairs else 0.0
+    return [(br, sq, dq) for sq, dq in pairs]
+
+
 def write_pythia_card(path: str, model: DarkPionTChannelModel, mXd: float,
                       mDarkQ: float, mRhoD: float, LambdaD: float,
                       lhe_file: str) -> None:
-    """Write Pythia 8 input card with computed masses, lifetimes, and BRs."""
+    """Write Pythia 8 input card with computed masses, lifetimes, and BRs.
 
+    Uses the generator basis (SU(4) adjoint pions T3/T8/T15).  The 4th
+    diagonal pion (4900441, κ=0 direction) is stable.
+    """
     results = model.compute_all()
-    mPiD = model.m_piD
+    mPiD    = model.m_piD
 
-    # --- lifetimes ---
-    # Diagonal pions (T3=12, T8=13, T15=14 in new generator ordering)
+    # Generator-basis diagonal pions: T3=12, T8=13, T15=14
     ctau_diag = {b: model.ctau_diag_mm(b) for b in DIAGONAL_PION_INDICES}
+    br_diag   = {b: results["diagonal"][b]["br"]
+                 for b in DIAGONAL_PION_INDICES if b in results["diagonal"]}
 
-    # Decaying off-diagonal pions: (0,1), (0,2), (1,2)
-    ctau_offdiag = {
-        (0, 1): model.ctau_off_diag_mm(0, 1),
-        (0, 2): model.ctau_off_diag_mm(0, 2),
-        (1, 2): model.ctau_off_diag_mm(1, 2),
-    }
+    # Off-diagonal pions: (0,1), (0,2), (1,2)
+    ctau_offdiag = {ab: model.ctau_off_diag_mm(*ab)
+                    for ab in [(0, 1), (0, 2), (1, 2)]}
+    br_offdiag   = {ab: results["off_diagonal"][ab]["br"]
+                    for ab in [(0, 1), (0, 2), (1, 2)]
+                    if ab in results["off_diagonal"]}
 
-    # --- branching ratios ---
-    br_diag = {b: results["diagonal"][b]["br"]
-               for b in DIAGONAL_PION_INDICES if b in results["diagonal"]}
-    br_offdiag = {k: results["off_diagonal"][k]["br"]
-                  for k in [(0,1),(0,2),(1,2)]
-                  if k in results["off_diagonal"]}
-
-    # Mediator decay channels: uniform over 9 combinations (3 dark q × 3 SM q)
-    # since all kappas are equal; each gets BR = 1/9
-    med_br = 1.0 / 9.0
+    # Mediator decay channels (kappa_mode-aware, computed from model)
+    med_channels = _build_med_channels(model)
 
     # pTminFSR must be strictly greater than Lambda
     ptmin_fsr = LambdaD * 1.1
 
-    # Build the BR lines for each decaying pion
+    _diag_names = {12: "T3", 13: "T8", 14: "T15"}
+
     def _diag_lines(b):
-        if b not in br_diag:
+        if b not in br_diag or not br_diag[b]:
             return f"! {_DIAG_PDG[b]}: no open decay channels"
         return _br_lines(_DIAG_PDG[b], br_diag[b])
 
+    def _diag_block(b):
+        """Return the full decay block for a diagonal generator-basis pion."""
+        pdg   = _DIAG_PDG[b]
+        name  = _diag_names.get(b, f"T{b}")
+        c     = ctau_diag[b]
+        if not np.isfinite(c) or b not in br_diag or not br_diag[b]:
+            return f"! --- Diagonal dark pion {name} ({pdg}) — stable ---\n{pdg}:mayDecay = off"
+        return (f"! --- Diagonal dark pion {name} ({pdg}), ctau = {c:.4f} mm ---\n"
+                f"{pdg}:tau0 = {c:.6f}\n"
+                f"{_diag_lines(b)}")
+
     def _offdiag_lines(ab):
-        if ab not in br_offdiag:
+        if ab not in br_offdiag or not br_offdiag[ab]:
             return f"! {_OFFDIAG_PDG[ab]}: no open decay channels"
         return _br_lines(_OFFDIAG_PDG[ab], br_offdiag[ab])
+
+    # Build mediator channel lines
+    med_ch_lines = []
+    for idx, (br, sq, dq) in enumerate(med_channels):
+        kw = "oneChannel" if idx == 0 else "addChannel"
+        med_ch_lines.append(
+            f"{_MEDIATOR_PDG}:{kw} on {br:.6f} 103 {sq}  {dq}"
+        )
+    med_ch_block = "\n".join(med_ch_lines)
 
     content = f"""\
 ! Pythia 8 input card generated by write_cards.py
 ! Model parameters:
-!   mXd    = {mXd} GeV
-!   mPiD   = {mPiD} GeV
-!   fD     = {model.fD} GeV
-!   kappa  = {model.kappa.real:.6f}
-!   mDarkQ = {mDarkQ} GeV
-!   LambdaD= {LambdaD} GeV
+!   mXd        = {mXd} GeV
+!   mPiD       = {mPiD} GeV
+!   fD         = {model.fD} GeV
+!   kappa      = {model.kappa.real:.6f}
+!   kappa_mode = {model.kappa_mode}
+!   mDarkQ     = {mDarkQ} GeV
+!   LambdaD    = {LambdaD} GeV
+!   pion_basis = generator  (SU(4) adjoint)
 
 ! ================================================================
 ! 1) Event generation
@@ -319,7 +359,8 @@ HadronLevel:Hadronize = on
 ! ================================================================
 
 HiddenValley:Ngauge = 3
-HiddenValley:nFlav = 4
+HiddenValley:nFlav = {model.Nf}
+HiddenValley:probKeepEta1 = 0
 HiddenValley:separateFlav = on
 HiddenValley:Lambda = {LambdaD:.4f}
 HiddenValley:pTminFSR = {ptmin_fsr:.4f}    ! must be > Lambda
@@ -336,16 +377,8 @@ HiddenValley:pTminFSR = {ptmin_fsr:.4f}    ! must be > Lambda
 
 HiddenValley:spinFv = 0
 
-! Mediator decays: X → SM_q + dark_q  (9 equal-BR channels, κ uniform)
-{_MEDIATOR_PDG}:oneChannel on {med_br:.6f} 103 1  4900101
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 3  4900101
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 5  4900101
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 1  4900102
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 3  4900102
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 5  4900102
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 1  4900103
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 3  4900103
-{_MEDIATOR_PDG}:addChannel on {med_br:.6f} 103 5  4900103
+! Mediator decays: X → SM_q + dark_q  (kappa_mode = {model.kappa_mode})
+{med_ch_block}
 {_MEDIATOR_PDG}:0:meMode = 103
 
 ! ================================================================
@@ -371,11 +404,11 @@ HiddenValley:spinFv = 0
 ! 5) Dark pion masses  (mPiD = {mPiD} GeV, mRhoD = {mRhoD:.4f} GeV)
 ! ================================================================
 
-! Diagonal dark pions
+! Diagonal dark pions (generator basis: T3, T8, T15)
 4900111:m0 = {mPiD:.4f}    ! T3
 4900221:m0 = {mPiD:.4f}    ! T8
 4900331:m0 = {mPiD:.4f}    ! T15
-4900441:m0 = {mPiD:.4f}    ! eta (stable, kappa=0 direction)
+4900441:m0 = {mPiD:.4f}    ! eta-like (stable, kappa=0 direction)
 
 ! Diagonal dark rhos
 4900113:m0 = {mRhoD:.4f}
@@ -498,23 +531,17 @@ HiddenValley:spinFv = 0
 ! 8) Dark pion decays — lifetimes and branching ratios
 ! ================================================================
 
-! --- Stable dark pions (involve dark flavor 4, kappa=0) ---
+! --- Stable dark pions (involve dark flavor 4 or kappa=0 direction) ---
 4900441:mayDecay = off
 4900411:mayDecay = off
 4900421:mayDecay = off
 4900431:mayDecay = off
 
-! --- Diagonal dark pion T3 (4900111), ctau = {ctau_diag[12]:.4f} mm ---
-4900111:tau0 = {ctau_diag[12]:.6f}
-{_diag_lines(12)}
+{_diag_block(12)}
 
-! --- Diagonal dark pion T8 (4900221), ctau = {ctau_diag[13]:.4f} mm ---
-4900221:tau0 = {ctau_diag[13]:.6f}
-{_diag_lines(13)}
+{_diag_block(13)}
 
-! --- Diagonal dark pion T15 (4900331), ctau = {ctau_diag[14]:.4f} mm ---
-4900331:tau0 = {ctau_diag[14]:.6f}
-{_diag_lines(14)}
+{_diag_block(14)}
 
 ! --- Off-diagonal dark pion pi(0,1) (4900211), ctau = {ctau_offdiag[(0,1)]:.4f} mm ---
 4900211:tau0 = {ctau_offdiag[(0,1)]:.6f}
@@ -675,12 +702,13 @@ echo "Done.  Events are in $PROCESS_DIR/Events/"
 
 def print_summary(model: DarkPionTChannelModel, mXd: float, species: str,
                   kappa: float, kappa_source: str, ctau_source: str) -> None:
-    results = model.compute_all()
-    labels = results["quark_labels"]
+    results      = model.compute_all()
+    labels       = results["quark_labels"]
     ctau_species = _SPECIES_GETTERS[species](model)
+    _DIAG_NAMES  = {12: "T3", 13: "T8", 14: "T15"}
 
     print(f"\n{'='*60}")
-    print(f"  Parameter point summary")
+    print(f"  Parameter point summary  (generator basis)")
     print(f"{'='*60}")
     print(f"  mXd    = {mXd} GeV")
     print(f"  mPiD   = {model.m_piD} GeV")
@@ -689,29 +717,33 @@ def print_summary(model: DarkPionTChannelModel, mXd: float, species: str,
     print(f"  c·τ ({species}) = {ctau_species:.4f} mm  ({ctau_source})")
     print()
 
-    print("  Diagonal dark pions:")
-    for b in [12, 13, 14]:
+    print("  Diagonal dark pions (T3/T8/T15):")
+    for b in DIAGONAL_PION_INDICES:
         if b in results["diagonal"]:
-            r = results["diagonal"][b]
-            name = {12: "T3", 13: "T8", 14: "T15"}[b]
-            print(f"    π^{name:3s}  ctau = {r['ctau_mm']:.4f} mm  "
+            r    = results["diagonal"][b]
+            name = _DIAG_NAMES.get(b, f"T{b}")
+            print(f"    {name}  ctau = {r['ctau_mm']:.4f} mm  "
                   f"total Γ = {r['total']:.3e} GeV")
             for (i, j), br in r["br"].items():
                 if br > 1e-4:
-                    print(f"           BR({labels[i]}{'̄' if i==j else ''}"
-                          f"{labels[j] if i!=j else ''}) = {br:.4f}")
+                    ql = labels[i] if i < len(labels) else str(i)
+                    qr = labels[j] if j < len(labels) else str(j)
+                    print(f"           BR({ql}{qr}) = {br:.4f}")
+    print(f"    4900441 (eta-like)  stable (κ=0 direction)")
 
     print()
     print("  Off-diagonal dark pions:")
     for ab in [(0, 1), (0, 2), (1, 2)]:
         if ab in results["off_diagonal"]:
-            r = results["off_diagonal"][ab]
+            r    = results["off_diagonal"][ab]
             a, b = ab
-            print(f"    π^({a},{b})  ctau = {r['ctau_mm']:.4f} mm  "
+            print(f"    π({a},{b})  ctau = {r['ctau_mm']:.4f} mm  "
                   f"total Γ = {r['total']:.3e} GeV")
             for (i, j), br in r["br"].items():
                 if br > 1e-4:
-                    print(f"           BR({labels[i]}{labels[j]}) = {br:.4f}")
+                    ql = labels[i] if i < len(labels) else str(i)
+                    qr = labels[j] if j < len(labels) else str(j)
+                    print(f"           BR({ql}{qr}) = {br:.4f}")
 
     print(f"{'='*60}\n")
 
@@ -743,7 +775,8 @@ def parse_args():
                    help="Dark rho meson mass [GeV] (default: 4 * mPiD)")
     p.add_argument("--species", default="T15",
                    choices=list(_SPECIES_GETTERS),
-                   help="Reference pion species used to set the ctau target (default: T15)")
+                   help="Reference pion species used to set the ctau target "
+                        "(default: T15 = longest-lived diagonal pion, bb̄-coupled)")
     p.add_argument("--kappa-mode", default="universal",
                    choices=["universal", "diagonal", "down_only"],
                    dest="kappa_mode",
@@ -808,7 +841,7 @@ def main():
         ctau_source  = f"target for {args.species}"
         print(f"\nSolved κ = {kappa:.6f} for c·τ = {args.ctau} mm ({args.species}).")
 
-    # Build the model with the final kappa
+    # Build the model with the final kappa — generator basis (SU(4) adjoint)
     model = DarkPionTChannelModel(fD=fD, m_piD=args.mPiD, m_X=args.mXd,
                                   kappa=kappa, kappa_mode=args.kappa_mode)
 

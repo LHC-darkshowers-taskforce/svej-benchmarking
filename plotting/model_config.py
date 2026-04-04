@@ -5,10 +5,11 @@ Standard ModelPlotConfig instances for each supported model variant.
 
 Available configs
 -----------------
-TCHANNEL_UNIVERSAL  — SU(4) t-channel, κ_αi = κ  (original benchmark)
-TCHANNEL_DIAGONAL   — SU(4) t-channel, κ_αi = κ δ_αi
-TCHANNEL_DOWNONLY   — SU(4) t-channel, κ_α0 = κ (only SM d quark)
-SCHANNEL_DEFAULT    — S-channel Z', Nf=3, dark_charges=[1,2,3]
+TCHANNEL_UNIVERSAL        — SU(4) t-channel, κ_αi = κ  (generator basis)
+TCHANNEL_DIAGONAL         — SU(4) t-channel, κ_αi = κ δ_αi (generator basis)
+TCHANNEL_DOWNONLY         — SU(4) t-channel, κ_α0 = κ (only SM d quark)
+TCHANNEL_FLAVOUR_DIAGONAL — U(3) t-channel, κ_αi = κ δ_αi (flavour basis, diagonal mixing)
+SCHANNEL_DEFAULT          — S-channel Z', Nf=3, dark_charges=[1,2,3]
 
 Each config can be iterated:
     from model_config import ALL_CONFIGS
@@ -16,7 +17,8 @@ Each config can be iterated:
         main(cfg)
 """
 
-from dark_pion_widths import DarkPionTChannelModel, DarkPionSChannelModel
+from dark_pion_widths import (DarkPionTChannelModel, DarkPionTChannelFlavourModel,
+                               DarkPionSChannelModel)
 from plotting_utils import ModelPlotConfig, PionSpec
 
 # ---------------------------------------------------------------------------
@@ -40,6 +42,16 @@ _DIAG_LABELS = {12: r"$\pi^{\mathrm{T3}}$",
                 13: r"$\pi^{\mathrm{T8}}$",
                 14: r"$\pi^{\mathrm{T15}}$"}
 
+# Flavour-basis diagonal pions (α ∈ {0,1,2} for Nf=3)
+# With diagonal mixing all three share the same ctau after mixing.
+_FDIAG_COLORS = {0: "tab:red", 1: "tab:purple", 2: "tab:brown"}
+_FDIAG_LS     = {0: "-",       1: "--",          2: "-."}
+_FDIAG_LABELS = {
+    0: r"$\pi^{(0,0)}$",
+    1: r"$\pi^{(1,1)}$",
+    2: r"$\pi^{(2,2)}$",
+}
+
 # S-channel colour palette (Nf=3, dark_charges=[1,2,3]: pions 6 and 7 decay)
 _SC_COLORS = {6: "tab:red",  7: "tab:purple"}
 _SC_LS     = {6: "-",        7: "--"}
@@ -53,6 +65,10 @@ def _od_spec(pair: tuple, label: str | None = None) -> PionSpec:
 
 def _diag_spec(idx: int) -> PionSpec:
     return PionSpec(idx, _DIAG_LABELS[idx], _DIAG_COLORS[idx], _DIAG_LS[idx])
+
+
+def _fdiag_spec(alpha: int) -> PionSpec:
+    return PionSpec(alpha, _FDIAG_LABELS[alpha], _FDIAG_COLORS[alpha], _FDIAG_LS[alpha])
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +159,39 @@ TCHANNEL_DOWNONLY = ModelPlotConfig(
 )
 
 # ---------------------------------------------------------------------------
+# T-channel flavour basis: diagonal κ  (Nf=3, kappa_mode="diagonal")
+# ---------------------------------------------------------------------------
+# Pions labelled by dark quark content Q̄_α Q_β (U(3) flavour basis).
+# Diagonal mixing equalises all π_{αα} lifetimes to the shortest (π_{22}, bb̄).
+# Decaying off-diagonal: (0,1)→ds̄, (0,2)→db̄, (1,2)→sb̄
+# Decaying diagonal (mixed): (0,0)→dd̄, (1,1)→ss̄, (2,2)→bb̄
+
+TCHANNEL_FLAVOUR_DIAGONAL = ModelPlotConfig(
+    name              = "T-channel flavour (diagonal κ, Nf=3)",
+    tag               = "tchannel_flavour_diagonal",
+    model_class       = DarkPionTChannelFlavourModel,
+    base_params       = dict(fD=10.0, m_piD=10.0, m_X=2000.0, kappa=1.0,
+                             Nf=3, kappa_mode="diagonal"),
+    mediator_param    = "m_X",
+    mediator_label    = r"$m_X$  [GeV]",
+    coupling_param    = "kappa",
+    coupling_label    = r"$|\kappa|$",
+    pion_specs        = [
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
+        _od_spec((1, 2)),
+        _fdiag_spec(0),
+        _fdiag_spec(1),
+        _fdiag_spec(2),
+    ],
+    contour_pion_specs = [
+        _fdiag_spec(2),
+        _od_spec((0, 2)),
+        _od_spec((1, 2)),
+    ],
+)
+
+# ---------------------------------------------------------------------------
 # S-channel: default  (Nf=3, dark_charges=[1,2,3])
 # ---------------------------------------------------------------------------
 # Decaying pions: indices 6 (T3-like, A=-3) and 7 (T8-like, A≈-7.51)
@@ -178,6 +227,7 @@ TCHANNEL_CONFIGS: list[ModelPlotConfig] = [
     TCHANNEL_UNIVERSAL,
     TCHANNEL_DIAGONAL,
     TCHANNEL_DOWNONLY,
+    TCHANNEL_FLAVOUR_DIAGONAL,
 ]
 
 ALL_CONFIGS: list[ModelPlotConfig] = TCHANNEL_CONFIGS + [SCHANNEL_DEFAULT]

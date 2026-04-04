@@ -108,9 +108,11 @@ class DarkPionSChannelModel(DarkPionModelBase):
         a_d: float = 0.0,
         Nc: int = 3,
         sm_quarks: Optional[dict] = None,
+        mix_diagonal: bool = True,
     ) -> None:
         resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_SM_QUARKS)
-        super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc, sm_quarks=resolved_quarks)
+        super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc,
+                         sm_quarks=resolved_quarks, mix_diagonal=mix_diagonal)
 
         self.m_Zp = float(m_Zp)
         self.g_qd = float(g_qd)
@@ -311,8 +313,8 @@ class DarkPionSChannelModel(DarkPionModelBase):
         Returns
         -------
         dict with keys:
-            off_diagonal : {(alpha, beta): summary_dict}  — decaying pairs only
-            diagonal     : {b: summary_dict}              — decaying diagonal only
+            off_diagonal : {(alpha, beta): summary_dict}
+            diagonal     : {b: summary_dict}  (generator indices)
             quark_labels : list[str]
         """
         off_diag: dict = {}
@@ -322,11 +324,10 @@ class DarkPionSChannelModel(DarkPionModelBase):
             if r["total"] > 0:
                 off_diag[(j, k)] = r
 
-        diag: dict = {}
-        for b in get_diagonal_indices(self.Nf):
-            r = self.compute_diagonal_pion(b)
-            if r["total"] > 0:
-                diag[b] = r
+        all_diag = {b: self.compute_diagonal_pion(b) for b in get_diagonal_indices(self.Nf)}
+        if self.mix_diagonal:
+            all_diag = self._apply_diagonal_mixing(all_diag)
+        diag = {b: r for b, r in all_diag.items() if r["total"] > 0}
 
         return {
             "off_diagonal": off_diag,
@@ -339,7 +340,14 @@ class DarkPionSChannelModel(DarkPionModelBase):
     # ------------------------------------------------------------------
 
     def ctau_diag_mm(self, b: int) -> float:
-        """c·τ [mm] for diagonal pion with generator index b."""
+        """c·τ [mm] for diagonal pion with generator index b.
+
+        When mix_diagonal=True returns the common mixed lifetime
+        (minimum over all individual diagonal ctau values).
+        """
+        if self.mix_diagonal:
+            results = self.compute_all()
+            return results["diagonal"].get(b, {"ctau_mm": np.inf})["ctau_mm"]
         return self.compute_diagonal_pion(b)["ctau_mm"]
 
     def ctau_off_diag_mm(self, alpha: int, beta: int) -> float:
@@ -375,9 +383,8 @@ class DarkPionSChannelModel(DarkPionModelBase):
 
     def print_summary(self) -> None:
         """Print a formatted summary of all dark pion properties."""
-        total_pions = self.Nf ** 2 - 1
-        results     = self.compute_all()
-        n_decaying  = len(results["off_diagonal"]) + len(results["diagonal"])
+        results    = self.compute_all()
+        n_decaying = len(results["off_diagonal"]) + len(results["diagonal"])
 
         print("=" * 72)
         print("  Dark Pion S-Channel (Z') Model Summary")
@@ -389,8 +396,10 @@ class DarkPionSChannelModel(DarkPionModelBase):
         print(f"  g_qd = {self.g_qd:.3f},  g_q = {self.g_q:.3f}")
         if self.a_d > 0:
             print(f"  Axial coupling a_d = {self.a_d:.3f}")
+        print(f"  SU({self.Nf}) adjoint",
+              "  (diagonal mixing on)" if self.mix_diagonal else "")
         print()
-        print(f"  Total dark pions: {total_pions}  (SU({self.Nf}) adjoint)")
+        print(f"  Total dark pions: {self.Nf ** 2 - 1}  (SU({self.Nf}) adjoint)")
         print(f"    Decaying: {n_decaying}")
         print()
 
@@ -411,15 +420,30 @@ class DarkPionSChannelModel(DarkPionModelBase):
                 print(f"  {label:>8}  {'off-diagonal':>12}  {Aa:>8.4f}  "
                       f"{'stable':>12}  {'inf':>12}")
 
-        for b in get_diagonal_indices(self.Nf):
-            info  = self.compute_diagonal_pion(b)
+        diag_iter = get_diagonal_indices(self.Nf)
+
+        # Identify driver before mixing for the footnote
+        if self.mix_diagonal:
+            unm    = {b: self._compute_pion(b) for b in diag_iter}
+            driver = min((b for b in unm if unm[b]["total"] > 0),
+                         key=lambda b: unm[b]["ctau_mm"], default=None)
+        else:
+            driver = None
+
+        for b in diag_iter:
+            r     = results["diagonal"].get(b)
             label = get_generator_label(self.Nf, b)
-            Aa    = info["anomaly_factor"]
-            if info["total"] > 0:
+            Aa    = self._compute_pion(b)["anomaly_factor"]
+            if r is not None and r["total"] > 0:
+                suffix = " *" if (self.mix_diagonal and b == driver) else ""
                 print(f"  {label:>8}  {'diagonal':>12}  {Aa:>8.4f}  "
-                      f"{info['total']:>12.3e}  {info['ctau_mm']:>12.3e}")
+                      f"{r['total']:>12.3e}  {r['ctau_mm']:>12.3e}{suffix}")
             else:
                 print(f"  {label:>8}  {'diagonal':>12}  {Aa:>8.4f}  "
                       f"{'stable':>12}  {'inf':>12}")
+
+        if self.mix_diagonal and driver is not None:
+            print(f"\n  * diagonal lifetime set by {get_generator_label(self.Nf, driver)} "
+                  f"(fastest-decaying species)")
 
         print("=" * 72)
