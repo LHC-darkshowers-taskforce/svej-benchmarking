@@ -170,7 +170,7 @@ TCHANNEL_FLAVOUR_DIAGONAL = ModelPlotConfig(
     name              = "T-channel flavour (diagonal κ, Nf=3)",
     tag               = "tchannel_flavour_diagonal",
     model_class       = DarkPionTChannelFlavourModel,
-    base_params       = dict(fD=10.0, m_piD=10.0, m_X=2000.0, kappa=1.0,
+    base_params       = dict(fD=10.0, m_piD=10.0, m_X=1000.0, kappa=1.0,
                              Nf=3, kappa_mode="diagonal"),
     mediator_param    = "m_X",
     mediator_label    = r"$m_X$  [GeV]",

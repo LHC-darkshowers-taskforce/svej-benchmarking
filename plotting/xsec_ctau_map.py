@@ -216,7 +216,7 @@ def plot_xsec_ctau_map(records: list[dict], output: str) -> None:
                             label=rf"$N={N_SIGNAL:.0f}$, $\mathcal{{L}}={LUMI_FB:.0f}\ \mathrm{{fb}}^{{-1}}$")
     ax.legend(handles=[contour_handle], loc="upper right")
 
-    ax.set_xscale("log")
+    #ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel(r"$m_{Xd}$  [GeV]")
     ax.set_ylabel(r"$c\tau$  [mm]")
