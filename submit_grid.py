@@ -143,12 +143,13 @@ def parse_args():
 
     grid.add_argument("--fD", type=float, default=None,
                       help="Dark decay constant [GeV] (default: mPiD)")
-    grid.add_argument("--LambdaD", type=float, default=None,
-                      help="Dark confinement scale [GeV] (default: mPiD)")
+    grid.add_argument("--r-piD", type=float, default=0.6, dest="r_piD",
+                      help="m_piD / Λ_D ratio (default: 0.6).  "
+                           "Sets Λ_D, m_qD, and m_ρD via chiral-scaling relations.")
     grid.add_argument("--mDarkQ", type=float, default=None,
-                      help="Dark quark mass [GeV] (default: 2 × mPiD)")
+                      help="Dark quark mass [GeV] (overrides chiral-scaling default)")
     grid.add_argument("--mRhoD", type=float, default=None,
-                      help="Dark rho mass [GeV] (default: 4 × mPiD)")
+                      help="Dark rho mass [GeV] (overrides chiral-scaling default)")
     grid.add_argument("--species", default="T15",
                       choices=["T15", "T8", "T3", "(0,1)", "(0,2)", "(1,2)"],
                       help="Reference pion species for c·τ target (default: T15)")
@@ -267,10 +268,10 @@ def main():
             "--output", cards_dir,
             *wp_args,
         ]
-        if args.fD      is not None: write_cmd += ["--fD",     str(args.fD)]
-        if args.LambdaD is not None: write_cmd += ["--LambdaD", str(args.LambdaD)]
-        if args.mDarkQ  is not None: write_cmd += ["--mDarkQ",  str(args.mDarkQ)]
-        if args.mRhoD   is not None: write_cmd += ["--mRhoD",   str(args.mRhoD)]
+        if args.fD     is not None: write_cmd += ["--fD",     str(args.fD)]
+        write_cmd += ["--r-piD", str(args.r_piD)]
+        if args.mDarkQ is not None: write_cmd += ["--mDarkQ", str(args.mDarkQ)]
+        if args.mRhoD  is not None: write_cmd += ["--mRhoD",  str(args.mRhoD)]
 
         if args.dry_run:
             print(f"\n[dry-run] Would generate cards: {' '.join(write_cmd)}")

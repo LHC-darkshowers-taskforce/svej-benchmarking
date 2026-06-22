@@ -27,7 +27,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from dark_pion_widths import DarkPionTChannelModel, DarkPionSChannelModel
-from plotting_utils import apply_style, save_fig, ModelPlotConfig
+from plotting_utils import apply_style, save_fig, add_param_box, ModelPlotConfig
 from model_config import ALL_CONFIGS
 
 apply_style()
@@ -89,13 +89,12 @@ def _collect_tchan_brs(config, pion_id, m_piD_vals):
     return br_arrays
 
 
-def _draw_tchan_panel(ax, br_dict, m_piD_vals, title, quarks, combined_labels):
+def _draw_tchan_panel(ax, br_dict, m_piD_vals, quarks, combined_labels):
     ys     = [np.nan_to_num(br_dict[p], nan=0.0) for p in _CHAN_PAIRS_TCHAN]
     colors = [_CHAN_COLORS_TCHAN[p] for p in _CHAN_PAIRS_TCHAN]
     labels = [_tchan_chan_label(quarks, *p, combined=combined_labels)
               for p in _CHAN_PAIRS_TCHAN]
 
-    # Only include channels that ever have nonzero BR
     nonzero = [i for i, y in enumerate(ys) if np.nanmax(y) > 1e-6]
     if not nonzero:
         ax.text(0.5, 0.5, "No open channels", ha="center", va="center",
@@ -110,7 +109,6 @@ def _draw_tchan_panel(ax, br_dict, m_piD_vals, title, quarks, combined_labels):
     ax.set_xlabel(r"$m_{\pi_D}$  [GeV]")
     ax.set_ylim(0.0, 1.0)
     ax.set_xlim(m_piD_vals[0], m_piD_vals[-1])
-    ax.set_title(title)
     ax.legend(fontsize=9, loc="upper left",
               bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
 
@@ -135,21 +133,14 @@ def plot_tchannel_brs(config: ModelPlotConfig) -> None:
 
         if isinstance(pion_id, int):
             name  = model_ref._diagonal_names.get(pion_id, f"T{pion_id+1}")
-            title = rf"$\pi^{{\mathrm{{{name}}}}}$ (diagonal)"
             fname = f"dark_pion_branching_ratios_{config.tag}_{name.lower()}.pdf"
         else:
             a, b  = pion_id
-            title = rf"$\pi^{{({a},{b})}}$ off-diagonal"
             fname = f"dark_pion_branching_ratios_{config.tag}_offdiag_{a}{b}.pdf"
 
         fig, ax = plt.subplots(figsize=(8, 5))
-        fig.suptitle(
-            rf"Dark pion branching ratios vs $m_{{\pi_D}}$  ($f_D = m_{{\pi_D}}$)"
-            f"\n{config.name}"
-        )
-        _draw_tchan_panel(ax, br_data, m_piD_vals, title, quarks, combined_labels=combined)
+        _draw_tchan_panel(ax, br_data, m_piD_vals, quarks, combined_labels=combined)
 
-        # Threshold markers
         masses = dict(zip(quarks, model_ref._q_masses))
         if "b" in masses:
             mb = masses["b"]
@@ -171,19 +162,19 @@ _SM_QUARK_COLORS = {
     "u": "#2166ac", "d": "#4dac26", "s": "#74add1",
     "c": "#f4a582", "b": "#d6604d",
 }
-_FOUR_BODY_COLOR = "#762a83"
 
 
 def _collect_schan_brs(config, pion_index, m_piD_vals):
     """Return {channel_key: np.ndarray of BR} for an s-channel pion."""
     ref_params = dict(config.base_params)
-    # Determine quark order from a reference model
     ref_params["fD"] = ref_params["m_piD"] = m_piD_vals[0]
     ref_model  = config.model_class(**ref_params)
     q_labels   = [q for q in ref_model._q_labels if q != "t"]
 
-    channels   = q_labels + ["anom_4body"]
-    br_arrays  = {c: np.full(len(m_piD_vals), np.nan) for c in channels}
+    anom_keys = [f"anom_2body_{q}" for q in q_labels]
+    tree_keys = [f"tree_{q}" for q in q_labels]
+    all_keys  = anom_keys + tree_keys
+    br_arrays = {k: np.full(len(m_piD_vals), 0.0) for k in all_keys}
 
     for ki, mpiD in enumerate(m_piD_vals):
         params = dict(config.base_params)
@@ -197,22 +188,36 @@ def _collect_schan_brs(config, pion_index, m_piD_vals):
 
         br = info["br"]
         for q in q_labels:
-            br_arrays[q][ki] = br.get(f"anom_2body_{q}", 0.0)
-        br_arrays["anom_4body"][ki] = br.get("anom_4body", 0.0)
+            br_arrays[f"anom_2body_{q}"][ki] = br.get(f"anom_2body_{q}", 0.0)
+            br_arrays[f"tree_{q}"][ki]        = br.get(f"tree_{q}", 0.0)
 
     return br_arrays, q_labels
 
 
-def _draw_schan_panel(ax, br_dict, q_labels, title, m_piD_vals, masses):
-    ys_quarks = [np.nan_to_num(br_dict[q], nan=0.0) for q in q_labels]
-    ys_4body  = np.nan_to_num(br_dict["anom_4body"], nan=0.0)
-    colors    = [_SM_QUARK_COLORS.get(q, "gray") for q in q_labels]
-    labels    = [rf"${q}\bar{{{q}}}$" for q in q_labels]
+def _draw_schan_panel(ax, br_dict, q_labels, m_piD_vals, masses):
+    ys     = []
+    colors = []
+    labels = []
 
-    ax.stackplot(m_piD_vals, ys_quarks + [ys_4body],
-                 labels=labels + ["4-body (param.)"],
-                 colors=colors + [_FOUR_BODY_COLOR],
-                 alpha=0.85)
+    for q in q_labels:
+        y = np.nan_to_num(br_dict.get(f"anom_2body_{q}", np.zeros(len(m_piD_vals))), nan=0.0)
+        if np.nanmax(y) > 1e-6:
+            ys.append(y)
+            colors.append(_SM_QUARK_COLORS.get(q, "gray"))
+            labels.append(rf"${q}\bar{{{q}}}$ (anom.)")
+    for q in q_labels:
+        y = np.nan_to_num(br_dict.get(f"tree_{q}", np.zeros(len(m_piD_vals))), nan=0.0)
+        if np.nanmax(y) > 1e-6:
+            ys.append(y)
+            colors.append(_SM_QUARK_COLORS.get(q, "gray"))
+            labels.append(rf"${q}\bar{{{q}}}$ (tree)")
+
+    if not ys:
+        ax.text(0.5, 0.5, "No open channels", ha="center", va="center",
+                transform=ax.transAxes)
+        return
+
+    ax.stackplot(m_piD_vals, ys, labels=labels, colors=colors, alpha=0.85)
 
     for q, thresh_label in [("c", r"$2m_c$"), ("b", r"$2m_b$")]:
         if q in masses:
@@ -226,7 +231,6 @@ def _draw_schan_panel(ax, br_dict, q_labels, title, m_piD_vals, masses):
     ax.set_xlabel(r"$m_{\pi_D}$  [GeV]")
     ax.set_ylim(0.0, 1.0)
     ax.set_xlim(m_piD_vals[0], m_piD_vals[-1])
-    ax.set_title(title)
     ax.legend(fontsize=9, loc="upper left",
               bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
 
@@ -234,7 +238,6 @@ def _draw_schan_panel(ax, br_dict, q_labels, title, m_piD_vals, masses):
 def plot_schannel_brs(config: ModelPlotConfig) -> None:
     m_piD_vals = np.geomspace(0.5, 100.0, 200)
 
-    # Reference model for quark masses
     ref        = dict(config.base_params)
     ref["fD"]  = ref["m_piD"] = 1.0
     ref_model  = config.model_class(**ref)
@@ -244,14 +247,21 @@ def plot_schannel_brs(config: ModelPlotConfig) -> None:
 
     br_pion, q_labels = _collect_schan_brs(config, rep_pion, m_piD_vals)
     fig1, ax1 = plt.subplots(figsize=(9, 5))
-    fig1.suptitle(
-        rf"Dark pion branching ratios vs $m_{{\pi_D}}$  ($f_D = m_{{\pi_D}}$)"
-        f"\n{config.name}"
-    )
-    _draw_schan_panel(ax1, br_pion, q_labels,
-                      r"Decaying $\pi_D$ (same BRs for all species via anomaly)",
-                      m_piD_vals, masses)
+    _draw_schan_panel(ax1, br_pion, q_labels, m_piD_vals, masses)
     ax1.set_ylabel("Branching ratio")
+
+    g_qd    = config.base_params.get("g_qd", "")
+    g_q     = config.base_params.get("g_q",  "")
+    m_Zp    = config.base_params.get("m_Zp", "")
+    charges = config.base_params.get("dark_charges", [])
+    charges_str = "[" + ", ".join(str(int(q)) if q == int(q) else str(q) for q in charges) + "]"
+    add_param_box(ax1, [
+        rf"$g_{{qd}} = {g_qd}$",
+        rf"$g_q = {g_q}$",
+        rf"$m_{{Z'}} = {m_Zp:.0f}$ GeV",
+        rf"$q = {charges_str}$",
+    ], loc="upper right")
+
     fig1.tight_layout()
     save_fig(fig1, f"dark_pion_branching_ratios_{config.tag}_pion.pdf")
 

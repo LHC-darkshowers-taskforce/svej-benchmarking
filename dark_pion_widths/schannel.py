@@ -132,7 +132,8 @@ class DarkPionSChannelModel(DarkPionModelBase):
         self._generators   = build_sun_generators(self.Nf)
         self._n_pions      = self.Nf ** 2 - 1
         self._gen_types    = [classify_generator(T) for T in self._generators]
-        self._anomaly_factors = self._compute_anomaly_factors()
+        self._anomaly_factors     = self._compute_anomaly_factors()
+        self._tree_charge_factors = self._compute_tree_charge_factors()
 
     # ------------------------------------------------------------------
     # Anomaly factors
@@ -145,9 +146,20 @@ class DarkPionSChannelModel(DarkPionModelBase):
             A[a] = 2.0 * np.real(np.trace(T @ self.charge_matrix_sq))
         return A
 
+    def _compute_tree_charge_factors(self) -> np.ndarray:
+        """Compute B^a = 2 Tr[T^a Q] for each generator (linear in charges)."""
+        B = np.zeros(self._n_pions)
+        for a, T in enumerate(self._generators):
+            B[a] = 2.0 * np.real(np.trace(T @ self.charge_matrix))
+        return B
+
     def anomaly_factor(self, a: int) -> float:
         """Anomaly factor A^a for pion index a (0-indexed)."""
         return float(self._anomaly_factors[a])
+
+    def tree_charge_factor(self, a: int) -> float:
+        """Tree-level charge factor B^a = 2 Tr[T^a Q] for pion index a."""
+        return float(self._tree_charge_factors[a])
 
     # ------------------------------------------------------------------
     # Anomaly-mediated two-body: π_d^a → q q̄
@@ -209,22 +221,30 @@ class DarkPionSChannelModel(DarkPionModelBase):
     # Tree-level decay (axial Z' coupling)
     # ------------------------------------------------------------------
 
-    def gamma_tree(self, q_idx: int) -> float:
+    def gamma_tree(self, a: int, q_idx: int) -> float:
         """
-        Partial width Γ(π_d → q_i q̄_i) [GeV] via tree-level single virtual
+        Partial width Γ(π_d^a → q_i q̄_i) [GeV] via tree-level single virtual
         Z' exchange.  Only non-zero when a_d ≠ 0.
+
+        The dark-side coupling to the axial current gives a factor
+        B^a = 2 Tr[T^a Q] (linear in dark charges), squared in the width.
         """
         if abs(self.a_d) < 1e-15:
+            return 0.0
+        Ba = self._tree_charge_factors[a]
+        if abs(Ba) < 1e-15:
             return 0.0
         mq = self._q_masses[q_idx]
         if 2 * mq >= self.m_piD:
             return 0.0
         beta = np.sqrt(1.0 - 4.0 * mq ** 2 / self.m_piD ** 2)
+        # Trace factor Tr[γ⁵(k̸₂-mq)γ⁵(k̸₁+mq)] = -2m_piD² contributes m_piD to numerator
         numerator = (
             self.Nc * self.g_qd ** 2 * self.a_d ** 2
-            * self.g_q ** 2 * self.fD ** 2 * mq ** 2
+            * Ba ** 2
+            * self.g_q ** 2 * self.fD ** 2 * mq ** 2 * self.m_piD
         )
-        denominator = 2.0 * np.pi * self.m_Zp ** 4 * self.m_piD
+        denominator = 2.0 * np.pi * self.m_Zp ** 4
         return float(numerator / denominator * beta)
 
     # ------------------------------------------------------------------
@@ -252,9 +272,9 @@ class DarkPionSChannelModel(DarkPionModelBase):
         anom_4body = self.gamma_anom_4body(a)
 
         tree_channels: dict = {}
-        if abs(self.a_d) > 1e-15 and gen_type == "diagonal":
+        if abs(self.a_d) > 1e-15:
             for qi in range(self._nq):
-                g = self.gamma_tree(qi)
+                g = self.gamma_tree(a, qi)
                 if g > 0:
                     tree_channels[self._q_labels[qi]] = g
 

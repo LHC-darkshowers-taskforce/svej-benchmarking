@@ -55,6 +55,7 @@ _FDIAG_LABELS = {
 # S-channel colour palette (Nf=3, dark_charges=[1,2,3]: pions 6 and 7 decay)
 _SC_COLORS = {6: "tab:red",  7: "tab:purple"}
 _SC_LS     = {6: "-",        7: "--"}
+_SC_LABELS = {6: r"$\pi^{T_3}$", 7: r"$\pi^{T_8}$"}
 
 
 def _od_spec(pair: tuple, label: str | None = None) -> PionSpec:
@@ -192,35 +193,137 @@ TCHANNEL_FLAVOUR_DIAGONAL = ModelPlotConfig(
 )
 
 # ---------------------------------------------------------------------------
-# S-channel: default  (Nf=3, dark_charges=[1,2,3])
+# S-channel: vector (a_d=0) and axial (a_d=1)  (Nf=3, dark_charges=[1,2,3])
 # ---------------------------------------------------------------------------
 # Decaying pions: indices 6 (T3-like, A=-3) and 7 (T8-like, A≈-7.51)
+# Vector: decays via anomaly (WZW); axial: decays via tree-level Z' exchange.
+
+_SC_BASE = dict(
+    Nf=3, Nd=3, dark_charges=[1.0, -2.0, 1.0],
+    fD=10.0, m_piD=10.0, m_Zp=2000.0,
+    g_qd=0.1, g_q=0.01,
+)
+_SC_PION_SPECS = [
+    PionSpec(6, _SC_LABELS[6], _SC_COLORS[6], _SC_LS[6]),
+    PionSpec(7, _SC_LABELS[7], _SC_COLORS[7], _SC_LS[7]),
+]
 
 SCHANNEL_DEFAULT = ModelPlotConfig(
     name              = "S-channel Z' (Nf=3, q=[1,2,3])",
     tag               = "schannel_default",
     model_class       = DarkPionSChannelModel,
-    base_params       = dict(
-        Nf=3, Nd=3, dark_charges=[1.0, 2.0, 3.0],
-        fD=10.0, m_piD=10.0, m_Zp=2000.0,
-        g_qd=0.5, g_q=0.5, a_d=0.0,
-    ),
+    base_params       = dict(**_SC_BASE, a_d=0.0),
     mediator_param    = "m_Zp",
     mediator_label    = r"$m_{Z'}$  [GeV]",
     coupling_param    = "g_qd",
     coupling_label    = r"$g_{qd}$",
+    pion_specs        = _SC_PION_SPECS,
+    contour_pion_specs = _SC_PION_SPECS,
+)
+
+SCHANNEL_VECTOR = ModelPlotConfig(
+    name              = "S-channel Z' vector (Nf=3, q=[1,2,3], a_d=0)",
+    tag               = "schannel_vector",
+    model_class       = DarkPionSChannelModel,
+    base_params       = dict(**_SC_BASE, a_d=0.0),
+    mediator_param    = "m_Zp",
+    mediator_label    = r"$m_{Z'}$  [GeV]",
+    coupling_param    = "g_qd",
+    coupling_label    = r"$g_{qd}$",
+    pion_specs        = _SC_PION_SPECS,
+    contour_pion_specs = _SC_PION_SPECS,
+)
+
+SCHANNEL_AXIAL = ModelPlotConfig(
+    name              = "S-channel Z' axial (Nf=3, q=[1,2,3], a_d=1)",
+    tag               = "schannel_axial",
+    model_class       = DarkPionSChannelModel,
+    base_params       = dict(**_SC_BASE, a_d=1.0),
+    mediator_param    = "m_Zp",
+    mediator_label    = r"$m_{Z'}$  [GeV]",
+    coupling_param    = "g_qd",
+    coupling_label    = r"$g_{qd}$",
+    pion_specs        = _SC_PION_SPECS,
+    contour_pion_specs = _SC_PION_SPECS,
+)
+
+# ---------------------------------------------------------------------------
+# T-channel: 5 GeV dark pion variants  (below b b̄ threshold)
+# ---------------------------------------------------------------------------
+
+TCHANNEL_UNIVERSAL_5GEV = ModelPlotConfig(
+    name              = "T-channel (universal κ, 5 GeV)",
+    tag               = "tchannel_universal_5gev",
+    model_class       = DarkPionTChannelModel,
+    base_params       = dict(fD=5.0, m_piD=5.0, m_X=2000.0, kappa=1.0,
+                             Nf=4, kappa_mode="universal"),
+    mediator_param    = "m_X",
+    mediator_label    = r"$m_X$  [GeV]",
+    coupling_param    = "kappa",
+    coupling_label    = r"$|\kappa|$",
     pion_specs        = [
-        PionSpec(6, r"$\pi^{T_3}$",  _SC_COLORS[6], _SC_LS[6]),
-        PionSpec(7, r"$\pi^{T_8}$",  _SC_COLORS[7], _SC_LS[7]),
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
+        _od_spec((1, 2)),
+        _diag_spec(14),
     ],
     contour_pion_specs = [
-        PionSpec(6, r"$\pi^{T_3}$",  _SC_COLORS[6], _SC_LS[6]),
-        PionSpec(7, r"$\pi^{T_8}$",  _SC_COLORS[7], _SC_LS[7]),
+        _diag_spec(14),
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
+    ],
+)
+
+TCHANNEL_DIAGONAL_5GEV = ModelPlotConfig(
+    name              = "T-channel (diagonal κ, 5 GeV)",
+    tag               = "tchannel_diagonal_5gev",
+    model_class       = DarkPionTChannelModel,
+    base_params       = dict(fD=5.0, m_piD=5.0, m_X=2000.0, kappa=1.0,
+                             Nf=4, kappa_mode="diagonal"),
+    mediator_param    = "m_X",
+    mediator_label    = r"$m_X$  [GeV]",
+    coupling_param    = "kappa",
+    coupling_label    = r"$|\kappa|$",
+    pion_specs        = [
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
+        _od_spec((1, 2)),
+        _diag_spec(12),
+        _diag_spec(13),
+        _diag_spec(14),
+    ],
+    contour_pion_specs = [
+        _diag_spec(14),
+        _diag_spec(13),
+        _od_spec((0, 1)),
+    ],
+)
+
+TCHANNEL_DOWNONLY_5GEV = ModelPlotConfig(
+    name              = "T-channel (down-only κ, 5 GeV)",
+    tag               = "tchannel_downonly_5gev",
+    model_class       = DarkPionTChannelModel,
+    base_params       = dict(fD=5.0, m_piD=5.0, m_X=2000.0, kappa=1.0,
+                             Nf=4, kappa_mode="down_only"),
+    mediator_param    = "m_X",
+    mediator_label    = r"$m_X$  [GeV]",
+    coupling_param    = "kappa",
+    coupling_label    = r"$|\kappa|$",
+    pion_specs        = [
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
+        _od_spec((1, 2)),
+        _diag_spec(14),
+    ],
+    contour_pion_specs = [
+        _diag_spec(14),
+        _od_spec((0, 1)),
+        _od_spec((0, 2)),
     ],
 )
 
 # ---------------------------------------------------------------------------
-# Convenience list
+# Convenience lists
 # ---------------------------------------------------------------------------
 
 TCHANNEL_CONFIGS: list[ModelPlotConfig] = [
@@ -230,4 +333,12 @@ TCHANNEL_CONFIGS: list[ModelPlotConfig] = [
     TCHANNEL_FLAVOUR_DIAGONAL,
 ]
 
-ALL_CONFIGS: list[ModelPlotConfig] = TCHANNEL_CONFIGS + [SCHANNEL_DEFAULT]
+TCHANNEL_5GEV_CONFIGS: list[ModelPlotConfig] = [
+    TCHANNEL_UNIVERSAL_5GEV,
+    TCHANNEL_DIAGONAL_5GEV,
+    TCHANNEL_DOWNONLY_5GEV,
+]
+
+SCHANNEL_CONFIGS: list[ModelPlotConfig] = [SCHANNEL_DEFAULT, SCHANNEL_VECTOR, SCHANNEL_AXIAL]
+
+ALL_CONFIGS: list[ModelPlotConfig] = TCHANNEL_CONFIGS + TCHANNEL_5GEV_CONFIGS + SCHANNEL_CONFIGS

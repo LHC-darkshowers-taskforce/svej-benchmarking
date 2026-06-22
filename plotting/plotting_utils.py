@@ -136,3 +136,31 @@ def contour_species_handles(contour_specs: list[PionSpec]) -> list:
                label=s.label)
         for s in contour_specs
     ]
+
+
+def add_param_box(ax, lines: list[str], loc: str = "lower right") -> None:
+    """
+    Add a small parameter-summary text box to `ax`.
+
+    Parameters
+    ----------
+    ax    : matplotlib Axes
+    lines : list of strings, each a parameter line, e.g. ["$g_{qd}=0.1$", "$g_q=0.01$"]
+    loc   : 'upper right', 'upper left', 'lower right', 'lower left'
+    """
+    text = "\n".join(lines)
+    x_map = {"right": 0.97, "left": 0.03}
+    y_map = {"upper": 0.97, "lower": 0.03}
+    va_map = {"upper": "top", "lower": "bottom"}
+    ha_map = {"right": "right", "left": "left"}
+
+    parts  = loc.split()
+    y_key, x_key = parts[0], parts[1]
+    ax.text(
+        x_map[x_key], y_map[y_key], text,
+        transform=ax.transAxes,
+        fontsize=9,
+        va=va_map[y_key], ha=ha_map[x_key],
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                  edgecolor="gray", alpha=0.8),
+    )
