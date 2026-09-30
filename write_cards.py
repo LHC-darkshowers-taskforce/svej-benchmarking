@@ -565,9 +565,32 @@ HiddenValley:spinFv = 0
 # Run card and launch script writers
 # ---------------------------------------------------------------------------
 
-def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0) -> None:
-    """Write a MadGraph run_card.dat."""
+def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0,
+                   merged: bool = True) -> None:
+    """Write a MadGraph run_card.dat.
+
+    merged=True   t-channel continuum (p p > qd qd + 0,1,2j): MLM merging on.
+    merged=False  on-shell mediator production: merging off.
+
+    The two samples must not share a run card. On-shell mediator events carry
+    no light ME partons outside the resonance decay, so MLM matches them
+    exclusively and vetoes almost all of them; they also sit at a hard scale of
+    2 m_X, where a 20 GeV merging scale is far too low.
+
+    4-flavour scheme in both cases: maxjetflavor = 4, b massive, b not in p/j.
+    The mediator still decays to b - that is a decay product, not a merging jet.
+    """
     ebeam = sqrts / 2.0
+    if merged:
+        matching_block = """  1    = ickkw
+  T    = cut_decays
+  0.0  = drjj
+  20   = xqcut"""
+    else:
+        matching_block = """  0    = ickkw
+  T    = cut_decays
+  0.0  = drjj
+  0.0  = xqcut"""
     content = f"""\
 #*********************************************************************
 #                       MadGraph5_aMC@NLO                            *
@@ -624,13 +647,15 @@ def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0) -> N
 # MLM jet matching
 #*********************************************************************
   2.0  = lhe_version
-  1    = ickkw
-  T    = cut_decays
-  0.0  = drjj
-  20   = xqcut
+{matching_block}
 
 #*********************************************************************
-# Cuts on dark quarks and jets (pT > 20 GeV to regulate t-channel divergence)
+# Cuts on dark quarks (pT > 20 GeV to regulate the t-channel divergence).
+# MG5 applies PDG cuts symmetrically to particle and antiparticle and rejects
+# negative codes, so keep these positive even though the UFO now labels the
+# dark quarks -4900101..103.  Not needed for the unmerged on-shell sample
+# (no t-channel divergence there); left in place so phase space is identical
+# between the two runs - drop it deliberately if you want the forward region.
 #*********************************************************************
   {{4900101: 20, 4900102: 20, 4900103: 20}} = pt_min_pdg
 
@@ -638,7 +663,7 @@ def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0) -> N
 # Misc
 #*********************************************************************
   15.0 = bwcutoff
-  5    = maxjetflavor
+  4    = maxjetflavor
   True = use_syst
   systematics = systematics_program
   ['--mur=0.5,1,2', '--muf=0.5,1,2', '--pdf=errorset'] = systematics_arguments
@@ -794,6 +819,18 @@ def parse_args():
                    help="Number of events for run_card (default: 10000)")
     p.add_argument("--sqrts", type=float, default=13600.0,
                    help="Centre-of-mass energy [GeV] for run_card (default: 13600)")
+    sample = p.add_mutually_exclusive_group(required=True)
+    sample.add_argument("--merged", dest="merged", action="store_true",
+                        help="t-channel continuum sample (proc_cards/"
+                             "dark_quark_pair_multijet.txt): MLM merging on "
+                             "(ickkw=1, xqcut=20).")
+    sample.add_argument("--unmerged", dest="merged", action="store_false",
+                        help="On-shell mediator sample (proc_cards/"
+                             "mediator_onshell.txt): merging off (ickkw=0). "
+                             "Required - these events carry no light ME partons "
+                             "outside the resonance decay, so MLM would veto "
+                             "almost all of them.")
+
     p.add_argument("--process-dir", default=None,
                    help="MadGraph process directory for launch.sh "
                         "(default: placeholder, edit launch.sh before running)")
@@ -873,7 +910,8 @@ def main():
     launch_path  = os.path.join(outdir, "launch.sh")
 
     write_param_card(param_path, args.mXd, mDarkQ, kappa, args.kappa_mode)
-    write_run_card(run_path, nevents=args.nevents, sqrts=args.sqrts)
+    write_run_card(run_path, nevents=args.nevents, sqrts=args.sqrts,
+                   merged=args.merged)
     write_pythia_card(pythia_path, model, args.mXd, mDarkQ, mRhoD, LambdaD,
                       lhe_file=args.lhe)
     write_launch_script(launch_path, outdir,
