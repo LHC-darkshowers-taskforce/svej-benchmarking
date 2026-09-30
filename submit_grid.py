@@ -159,6 +159,16 @@ def parse_args():
                       help="Centre-of-mass energy [GeV] (default: 13600)")
 
     # --- Paths ---
+    sample = p.add_mutually_exclusive_group(required=True)
+    sample.add_argument("--merged", dest="merged", action="store_true",
+                        help="t-channel continuum sample: MLM merging on "
+                             "(ickkw=1, xqcut=20). Use with the process built "
+                             "from proc_cards/dark_quark_pair_multijet.txt.")
+    sample.add_argument("--unmerged", dest="merged", action="store_false",
+                        help="On-shell mediator sample: merging off (ickkw=0). "
+                             "Use with the process built from "
+                             "proc_cards/mediator_onshell.txt.")
+
     paths = p.add_argument_group("paths")
     paths.add_argument("--process-dir", required=True,
                        help="Compiled MadGraph process directory")
@@ -266,6 +276,7 @@ def main():
             "--process-dir", args.process_dir,
             "--mg5-exe", args.mg5_exe,
             "--output", cards_dir,
+            "--merged" if args.merged else "--unmerged",
             *wp_args,
         ]
         if args.fD     is not None: write_cmd += ["--fD",     str(args.fD)]

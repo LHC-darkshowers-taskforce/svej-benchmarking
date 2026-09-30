@@ -88,17 +88,20 @@ At least one of `--ctau` or `--kappa` must be given. If both are given,
 ### Examples
 
 ```bash
-# Solve for kappa given a target lifetime
-python write_cards.py --mXd 1500 --mPiD 10 --ctau 100
+# Solve for kappa given a target lifetime (t-channel continuum sample)
+python write_cards.py --mXd 1500 --mPiD 10 --ctau 100 --merged
+
+# On-shell mediator sample - merging must be off
+python write_cards.py --mXd 1500 --mPiD 10 --ctau 100 --unmerged
 
 # Use kappa directly, compute lifetime
-python write_cards.py --mXd 2000 --mPiD 10 --kappa 0.5
+python write_cards.py --mXd 2000 --mPiD 10 --kappa 0.5 --merged
 
 # Diagonal kappa matrix, custom output directory
-python write_cards.py --mXd 2000 --mPiD 15 --ctau 50 \
+python write_cards.py --mXd 2000 --mPiD 15 --ctau 50 --merged \
     --kappa-mode diagonal \
     --fD 15 --LambdaD 4 --nevents 50000 \
-    --process-dir mg5_output/mediator_pair_down \
+    --process-dir mg5_output/dark_quark_pair_multijet \
     --output cards/my_point
 ```
 
@@ -114,15 +117,32 @@ default (or `_kappa{kappa}` if only `--kappa` is given).
 Ready-made proc cards are in `proc_cards/`. Run the one you want:
 
 ```bash
-mg5_aMC proc_cards/mediator_pair.txt
-# → mg5_output/mediator_pair/
+mg5_aMC proc_cards/mediator_onshell.txt
+# → mg5_output/mediator_onshell/
 
 mg5_aMC proc_cards/dark_quark_pair_multijet.txt
 # → mg5_output/dark_quark_pair_multijet/
 ```
 
-The dark quark multijet card generates `p p > qd qd`, `p p > qd qd j`, and
-`p p > qd qd j j` as a combined process.
+The two cards are complementary halves of the same signal and are meant to be
+run together, not as alternatives:
+
+- **`mediator_onshell.txt`** — on-shell mediator production, both pair
+  (`p p > x x~`) and associated (`p p > x qd`), with decay chains. Unmerged:
+  no `ickkw`/`xqcut`. Associated production dominates and increasingly so with
+  mass (roughly 4:1 over pair at 1 TeV, 92:1 at 2 TeV), so a pair-only sample
+  is nearly empty at the top of the scan.
+
+- **`dark_quark_pair_multijet.txt`** — the t-channel continuum, `p p > qd qd`
+  with 0, 1 and 2 extra jets as a combined MLM-merged process. The `$$ x`
+  veto removes s-channel (on-shell) mediator diagrams so this does not double
+  count against the first card; the t-channel `x` exchange that drives this
+  sample is unaffected.
+
+Do not put a resonance inside the merged sample. On-shell mediator events
+carry no non-resonance ME partons, so MLM matches them exclusively and vetoes
+almost all of them — which is what the `$$ x` veto and the separate on-shell
+card exist to avoid.
 
 This compiles the matrix elements once — reuse the same directory for all
 parameter points.
@@ -132,8 +152,8 @@ parameter points.
 Pass `--process-dir` when generating cards, then run the launch script:
 
 ```bash
-python write_cards.py --mXd 1500 --mPiD 10 --ctau 100 \
-    --process-dir mg5_output/mediator_pair_down
+python write_cards.py --mXd 1500 --mPiD 10 --ctau 100 --merged \
+    --process-dir mg5_output/dark_quark_pair_multijet
 
 bash cards/mXd1500_mPiD10_ctau100/launch.sh
 ```
@@ -141,7 +161,7 @@ bash cards/mXd1500_mPiD10_ctau100/launch.sh
 `launch.sh` copies `param_card.dat` and `run_card.dat` into the process
 directory and calls `echo "launch -f" | mg5_aMC <process_dir>`. The `-f` flag
 skips all interactive prompts. Events land in
-`mg5_output/mediator_pair_down/Events/`.
+`mg5_output/dark_quark_pair_multijet/Events/`.
 
 You can also override the process directory and executable at runtime:
 
@@ -156,7 +176,7 @@ bash launch.sh /path/to/process_dir /path/to/mg5_aMC
 Point Pythia at the LHE file produced by MadGraph:
 
 ```bash
-python write_cards.py ... --lhe mg5_output/mediator_pair_down/Events/run_01/unweighted_events.lhe.gz
+python write_cards.py ... --lhe mg5_output/dark_quark_pair_multijet/Events/run_01/unweighted_events.lhe.gz
 ```
 
 Then pass `pythia_card.dat` to your Pythia driver. The card sets all dark
@@ -181,7 +201,8 @@ python submit_grid.py \
     --mXd 1000 2000 3000 4000 \
     --mPiD 5 10 20 \
     --ctau 1 10 100 \
-    --process-dir mg5_output/mediator_pair_down \
+    --merged \
+    --process-dir mg5_output/dark_quark_pair_multijet \
     --env-setup "source /cvmfs/sft.cern.ch/lcg/views/LCG_106/x86_64-el9-gcc13-opt/setup.sh" \
     --partition cpu \
     --time 04:00:00 \
@@ -191,6 +212,15 @@ python submit_grid.py \
 
 This submits 4 × 3 × 3 = 36 Slurm jobs. Use `--kappa` instead of `--ctau` to
 specify the coupling directly.
+
+`--merged` / `--unmerged` is **required** and must match the process directory:
+`--merged` for the t-channel continuum built from
+`dark_quark_pair_multijet.txt`, `--unmerged` for the on-shell mediator sample
+built from `mediator_onshell.txt`. It sets `ickkw` and `xqcut` in the run card.
+Getting it wrong is silent — the run completes and the cross-section looks
+plausible, but MLM vetoes almost every on-shell mediator event, because those
+events carry no light ME partons outside the resonance decay. Run the grid
+twice, once per sample.
 
 Always preview job scripts before submitting:
 
@@ -366,7 +396,7 @@ Output: `coupling_solutions_heatmap_<model_tag>.pdf`,
 python plotting/cross_section.py --runs-dir runs/
 
 # From a single MadGraph process directory
-python plotting/cross_section.py --process-dir mg5_output/mediator_pair_down
+python plotting/cross_section.py --process-dir mg5_output/dark_quark_pair_multijet
 ```
 
 Options: `--output FILE`, `--no-group` (plot all runs as one series instead

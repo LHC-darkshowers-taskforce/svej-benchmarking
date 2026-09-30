@@ -1,6 +1,23 @@
+# t-channel continuum: dark quark pair + 0,1,2 jets, MLM merged.
+#
+# $$ x forbids the mediator in s-channel, removing the on-shell production that
+# mediator_onshell.txt now covers. The t-channel x exchange - which IS the
+# production mechanism for this sample - is untouched by the veto.
+#
+# Run card: ickkw = 1, and set qCut comfortably above xqcut (commonly 1.5x).
+# qCut = xqcut leaves no gap between where the ME stops and where the matching
+# starts testing, which over-vetoes the first bin.
+#
+# The continuum hard scale is ~550-660 GeV and barely moves with m_X (kappa is
+# scaled with the mass), so one xqcut serves the whole mass scan - unlike the
+# resonant piece, whose scale tracks 2 m_X.
+
 import model ./models/t-channel_dark_QCD/darkQCD_fv_down
+
 define qd = dDark1 dDark1~ dDark2 dDark2~ dDark3 dDark3~
-generate p p > qd qd
-add process p p > qd qd j
-add process p p > qd qd j j
+
+generate    p p > qd qd     $$ x
+add process p p > qd qd j   $$ x
+add process p p > qd qd j j $$ x
+
 output mg5_output/dark_quark_pair_multijet
