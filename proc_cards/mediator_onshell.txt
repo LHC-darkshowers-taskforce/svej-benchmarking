@@ -1,0 +1,37 @@
+# On-shell mediator production: pair AND associated (single) production.
+#
+# Unmerged on purpose - no ickkw/xqcut. The extra radiation off a multi-TeV
+# system is described well by the parton shower, and MLM would force every one
+# of these events into exclusive matching (they carry no non-resonance ME
+# partons), vetoing almost all of them.
+#
+# Associated production dominates, increasingly so with mass. Measured on the
+# resonant subset of existing samples: 4.2:1 over pair at m_X = 1 TeV,
+# 27:1 at 1.5 TeV, 92:1 at 2 TeV. A pair-only card is nearly empty at 2 TeV.
+#
+# No same-sign x x: the dark quarks are Dirac, so dark number forbids it and
+# MG5 returns no diagrams. (Electric charge would allow it - x has the same
+# charge as the down quark - but a Majorana dark quark would be needed.)
+#
+# Decay chains are included so the LHE is self-describing rather than relying
+# on Pythia's BR table matching the kappa matrix. x is a scalar, so there are
+# no spin correlations to lose either way.
+#
+# Pair this with the $$ x veto in dark_quark_pair_multijet.txt so the resonant
+# contributions are not double counted between the two samples.
+
+import model ./models/t-channel_dark_QCD/darkQCD_fv_down
+
+# qdark: the dark quarks.  qdown: the SM down-type quarks the mediator decays
+# to.  b is included - the model has X-dDark-b vertices and nonzero kappa_i3,
+# so leaving it out would put the b channels in the width but not the matrix
+# element.  Both signs are listed in each; MG5 keeps only the charge- and
+# dark-number-allowed combinations.
+define qdark = dDark1 dDark1~ dDark2 dDark2~ dDark3 dDark3~
+define qdown = d s b d~ s~ b~
+
+generate    p p > x  x~,    (x > qdark qdown), (x~ > qdark qdown)
+add process p p > x  qdark, (x > qdark qdown)
+add process p p > x~ qdark, (x~ > qdark qdown)
+
+output mg5_output/mediator_onshell

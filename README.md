@@ -114,15 +114,32 @@ default (or `_kappa{kappa}` if only `--kappa` is given).
 Ready-made proc cards are in `proc_cards/`. Run the one you want:
 
 ```bash
-mg5_aMC proc_cards/mediator_pair.txt
-# → mg5_output/mediator_pair/
+mg5_aMC proc_cards/mediator_onshell.txt
+# → mg5_output/mediator_onshell/
 
 mg5_aMC proc_cards/dark_quark_pair_multijet.txt
 # → mg5_output/dark_quark_pair_multijet/
 ```
 
-The dark quark multijet card generates `p p > qd qd`, `p p > qd qd j`, and
-`p p > qd qd j j` as a combined process.
+The two cards are complementary halves of the same signal and are meant to be
+run together, not as alternatives:
+
+- **`mediator_onshell.txt`** — on-shell mediator production, both pair
+  (`p p > x x~`) and associated (`p p > x qd`), with decay chains. Unmerged:
+  no `ickkw`/`xqcut`. Associated production dominates and increasingly so with
+  mass (roughly 4:1 over pair at 1 TeV, 92:1 at 2 TeV), so a pair-only sample
+  is nearly empty at the top of the scan.
+
+- **`dark_quark_pair_multijet.txt`** — the t-channel continuum, `p p > qd qd`
+  with 0, 1 and 2 extra jets as a combined MLM-merged process. The `$$ x`
+  veto removes s-channel (on-shell) mediator diagrams so this does not double
+  count against the first card; the t-channel `x` exchange that drives this
+  sample is unaffected.
+
+Do not put a resonance inside the merged sample. On-shell mediator events
+carry no non-resonance ME partons, so MLM matches them exclusively and vetoes
+almost all of them — which is what the `$$ x` veto and the separate on-shell
+card exist to avoid.
 
 This compiles the matrix elements once — reuse the same directory for all
 parameter points.
