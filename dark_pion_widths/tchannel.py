@@ -34,6 +34,28 @@ pions T3, T8, T15 are at indices 12, 13, 14 respectively.  T15 is still at
 index 14, matching the old core.py; T3 and T8 move from 2, 7 to 12, 13.
 For universal κ, T3 and T8 have zero width (their generator traces cancel),
 so existing benchmark results for T15 are unchanged.
+
+Kinematic factors
+-----------------
+Two different kinematic factors appear in the literature:
+
+  - Renner & Schwaller (arXiv:1803.08080) Eq. 3.6 uses:
+        sqrt((1 - (mi+mj)^2/m_piD^2)(1 - (mi-mj)^2/m_piD^2))
+
+  - Carmona et al. (arXiv:2411.15073) Eq. 2.18 uses an additional prefactor:
+        (1 - (mi^2 - mj^2)^2 / ((mi^2 + mj^2) m_piD^2)) × sqrt(...)
+
+The generator-basis methods (gamma_off_diag, gamma_diag) use the Carmona et al.
+Q_ij factor via _omega().  The flavour-basis method (gamma_flavour) uses the
+simpler sqrt factor via _sqrt_kinematic(), matching Renner & Schwaller.
+
+Normalisation
+-------------
+The flavour-basis width (gamma_flavour) uses a prefactor Nc fD² m_piD / (32π m_X⁴).
+This differs from the printed Eq. 3.6 of arXiv:1803.08080 (which has 8π) by a
+factor of 4 = 2², arising from the Gell-Mann normalisation Tr(λ^a λ^b) = 2δ^{ab}
+used in that paper's pion field definition Π_D = π^a λ^a.  The 1/(32π) prefactor
+reproduces the numerical results in their Table 3.
 """
 
 import numpy as np
@@ -46,7 +68,7 @@ from .generators import build_sun_generators, get_diagonal_indices, get_diagonal
 # ---------------------------------------------------------------------------
 DEFAULT_QUARKS: dict[str, float] = {"d": 4.7e-3, "s": 9.6e-2, "b": 4.18}
 
-_KAPPA_MODES = ("universal", "diagonal", "down_only")
+_KAPPA_MODES = ("universal", "diagonal", "down_only", "svd", "emerging_jets")
 
 
 class DarkPionTChannelModel(DarkPionModelBase):
@@ -62,15 +84,35 @@ class DarkPionTChannelModel(DarkPionModelBase):
     m_X : float
         Mediator mass [GeV].
     kappa : complex
-        Overall coupling magnitude.  The precise structure within the κ matrix
-        is controlled by kappa_mode.
+        Overall coupling magnitude κ₀.  The precise structure within the κ
+        matrix is controlled by kappa_mode and the SVD parameters below.
     Nf : int
         Total number of dark quark flavors (SU(Nf) dark flavor group).
         Default 4 (reproduces original SU(4) benchmark).
     kappa_mode : str
-        One of 'universal', 'diagonal', 'down_only'.  See module docstring.
+        One of:
+          'universal'      — κ_{α,i} = κ₀  for α < n_active, all i.
+          'diagonal'       — κ_{α,i} = κ₀ δ_{α,i}  for α,i < n_active.
+          'down_only'      — κ_{α,0} = κ₀  for α < n_active, rest zero.
+          'svd'            — Full SVD parameterisation κ = D·U from
+                             arXiv:1803.08080 Eqs. 2.5–2.8.  Uses kappa1,
+                             kappa2, theta12, theta13, theta23, delta12,
+                             delta13, delta23 parameters.
+          'emerging_jets'  — κ_{α,i} = κ₀/√3  for α < n_active, all i.
+                             Reproduces Eq. 6.1 of arXiv:1803.08080.
+    kappa1 : float
+        SVD parameter κ₁ (only used when kappa_mode='svd').
+        D = κ₀·𝟙 + diag(κ₁, κ₂, −(κ₁+κ₂)).  Default 0.
+    kappa2 : float
+        SVD parameter κ₂ (only used when kappa_mode='svd').  Default 0.
+    theta12, theta13, theta23 : float
+        Mixing angles in the unitary matrix U = U₂₃·U₁₃·U₁₂ (radians).
+        Only used when kappa_mode='svd'.  Default 0.
+    delta12, delta13, delta23 : float
+        CP phases in the unitary matrix U (radians).
+        Only used when kappa_mode='svd'.  Default 0.
     Nc : int
-        Number of dark colours (default 3).
+        Number of SM QCD colours (default 3).
     sm_quarks : dict, optional
         SM quark masses {label: mass_GeV}.  Defaults to {d, s, b}.
     mix_diagonal : bool
@@ -90,6 +132,15 @@ class DarkPionTChannelModel(DarkPionModelBase):
         Nc: int = 3,
         sm_quarks: dict | None = None,
         mix_diagonal: bool = True,
+        # SVD parameters (only used when kappa_mode='svd')
+        kappa1: float = 0.0,
+        kappa2: float = 0.0,
+        theta12: float = 0.0,
+        theta13: float = 0.0,
+        theta23: float = 0.0,
+        delta12: float = 0.0,
+        delta13: float = 0.0,
+        delta23: float = 0.0,
     ) -> None:
         resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_QUARKS)
         super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc,
@@ -98,6 +149,16 @@ class DarkPionTChannelModel(DarkPionModelBase):
         self.m_X        = float(m_X)
         self.kappa      = complex(kappa)
         self.kappa_mode = str(kappa_mode)
+
+        # SVD parameters
+        self.kappa1  = float(kappa1)
+        self.kappa2  = float(kappa2)
+        self.theta12 = float(theta12)
+        self.theta13 = float(theta13)
+        self.theta23 = float(theta23)
+        self.delta12 = float(delta12)
+        self.delta13 = float(delta13)
+        self.delta23 = float(delta23)
 
         if self.kappa_mode not in _KAPPA_MODES:
             raise ValueError(
@@ -139,11 +200,87 @@ class DarkPionTChannelModel(DarkPionModelBase):
         elif self.kappa_mode == "down_only":
             mat[:na, 0] = self.kappa   # only SM quark index 0 (d quark)
 
+        elif self.kappa_mode == "emerging_jets":
+            # Eq. 6.1 of arXiv:1803.08080: κ_{α,i} = κ₀/√3 for all active
+            mat[:na, :] = self.kappa / np.sqrt(3.0)
+
+        elif self.kappa_mode == "svd":
+            # Full SVD parameterisation from arXiv:1803.08080 Eqs. 2.5–2.8.
+            # κ = D · U  (after rotating away V with the dark flavour symmetry)
+            # D = κ₀·𝟙 + diag(κ₁, κ₂, −(κ₁+κ₂))   [n_active × n_active]
+            # U = U₂₃ · U₁₃ · U₁₂                   [n_active × n_active]
+            mat[:na, :na] = self._build_svd_block()
+
         return mat
+
+    @staticmethod
+    def _build_rotation_matrix(
+        n: int, i: int, j: int, theta: float, delta: float = 0.0,
+    ) -> np.ndarray:
+        """
+        Build an n×n unitary rotation matrix U_{ij} that mixes indices i and j.
+
+        Parameterised as in arXiv:1803.08080 Eq. 2.7:
+            U_{ii} = cos θ,  U_{jj} = cos θ
+            U_{ij} = sin θ · e^{-iδ}
+            U_{ji} = −sin θ · e^{iδ}   (note sign convention from Eq. 2.7)
+            all other entries = identity
+        """
+        U = np.eye(n, dtype=complex)
+        c, s = np.cos(theta), np.sin(theta)
+        phase = np.exp(-1j * delta)
+        U[i, i] = c
+        U[j, j] = c
+        U[i, j] = s * phase
+        U[j, i] = -s * np.conj(phase)
+        return U
+
+    def _build_svd_block(self) -> np.ndarray:
+        """
+        Build the n_active × n_active non-zero block of κ = D · U.
+
+        D = κ₀·𝟙 + diag(κ₁, κ₂, −(κ₁+κ₂))
+        U = U₂₃ · U₁₃ · U₁₂
+
+        For n_active < 3, the matrix is truncated accordingly.
+        """
+        na = self._n_active
+        k0 = abs(self.kappa)  # κ₀ is the overall scale
+
+        # Build D matrix
+        if na == 1:
+            D = np.array([[k0 + self.kappa1]], dtype=complex)
+        elif na == 2:
+            D = np.diag(np.array([
+                k0 + self.kappa1,
+                k0 + self.kappa2,
+            ], dtype=complex))
+        else:  # na == 3
+            D = np.diag(np.array([
+                k0 + self.kappa1,
+                k0 + self.kappa2,
+                k0 - self.kappa1 - self.kappa2,
+            ], dtype=complex))
+
+        # Build U = U23 · U13 · U12
+        U = np.eye(na, dtype=complex)
+        if na >= 2:
+            U12 = self._build_rotation_matrix(na, 0, 1, self.theta12, self.delta12)
+            U = U12
+        if na >= 2:
+            U13 = self._build_rotation_matrix(na, 0, min(2, na - 1), self.theta13, self.delta13)
+            U = U13 @ U
+        if na >= 3:
+            U23 = self._build_rotation_matrix(na, 1, 2, self.theta23, self.delta23)
+            U = U23 @ U
+
+        return D @ U
 
     def _omega(self, mi: float, mj: float) -> float:
         """
-        Kinematic phase-space factor Ω(mi, mj; m_piD).
+        Kinematic phase-space factor Q_ij from Carmona et al. (arXiv:2411.15073)
+        Eq. 2.18.  Used by the generator-basis methods.
+
         Returns 0 if the decay is kinematically forbidden.
         """
         mpiD = self.m_piD
@@ -157,6 +294,21 @@ class DarkPionTChannelModel(DarkPionModelBase):
         arg = (1 - (mi + mj) ** 2 / mpiD ** 2) * (1 - (mi - mj) ** 2 / mpiD ** 2)
         return float(term1 * np.sqrt(max(0.0, arg)))
 
+    def _sqrt_kinematic(self, mi: float, mj: float) -> float:
+        """
+        Simple kinematic factor from Renner & Schwaller (arXiv:1803.08080)
+        Eq. 3.6.  Used by the flavour-basis method.
+
+            sqrt((1 - (mi+mj)^2 / m_piD^2) * (1 - (mi-mj)^2 / m_piD^2))
+
+        Returns 0 if the decay is kinematically forbidden.
+        """
+        mpiD = self.m_piD
+        if mpiD < mi + mj:
+            return 0.0
+        arg = (1.0 - (mi + mj) ** 2 / mpiD ** 2) * (1.0 - (mi - mj) ** 2 / mpiD ** 2)
+        return float(np.sqrt(max(0.0, arg)))
+
     # ------------------------------------------------------------------
     # Partial widths
     # ------------------------------------------------------------------
@@ -164,6 +316,8 @@ class DarkPionTChannelModel(DarkPionModelBase):
     def gamma_off_diag(self, alpha: int, beta: int, i: int, j: int) -> float:
         """
         Partial width Γ(π^(α,β) → q_i q̄_j)  [GeV].
+
+        Generator-basis formula from Carmona et al. (arXiv:2411.15073) Eq. 2.16.
 
         Parameters
         ----------
@@ -182,6 +336,8 @@ class DarkPionTChannelModel(DarkPionModelBase):
     def gamma_diag(self, b: int, i: int, j: int) -> float:
         """
         Partial width Γ(π^b → q_i q̄_j)  [GeV]  for generator index b (0-indexed).
+
+        Generator-basis formula from Carmona et al. (arXiv:2411.15073) Eq. 2.17.
 
         Parameters
         ----------
@@ -204,21 +360,30 @@ class DarkPionTChannelModel(DarkPionModelBase):
         Partial width Γ(π_{αβ} → q_i q̄_j) in the flavour basis  [GeV].
 
         Applies uniformly to both diagonal (α=β) and off-diagonal (α≠β) pions.
-        Formula from arXiv:1803.08080:
+        Matches the numerical results of Renner & Schwaller (arXiv:1803.08080)
+        Table 3.
 
-            Γ = Nc fD² m_π / (8π m_X⁴)  ×  |κ_{αi} κ*_{βj}|²  ×  (m_i² + m_j²) Ω_{ij}
+        The prefactor is Nc fD² m_piD / (32π m_X⁴).  This differs from the
+        printed Eq. 3.6 (which has 8π) by a factor of 4, accounting for the
+        Gell-Mann normalisation convention Π_D = π^a λ^a with
+        Tr(λ^a λ^b) = 2δ^{ab}.
+
+        The kinematic factor is the simple sqrt from Eq. 3.6, without the
+        additional Q_ij prefactor of the Carmona et al. formula.
 
         Parameters
         ----------
         alpha, beta : dark-flavor indices labelling pion Q̄_α Q_β.
         i, j        : SM quark indices.
         """
-        Omega = self._omega(self._q_masses[i], self._q_masses[j])
-        if Omega == 0.0:
+        mi = self._q_masses[i]
+        mj = self._q_masses[j]
+        kin = self._sqrt_kinematic(mi, mj)
+        if kin == 0.0:
             return 0.0
-        pref  = self.Nc * self.fD ** 2 * self.m_piD / (8 * np.pi * self.m_X ** 4)
+        pref  = self.Nc * self.fD ** 2 * self.m_piD / (8.0 * np.pi * self.m_X ** 4)
         kcoef = self._kmat[alpha, i] * np.conj(self._kmat[beta, j])
-        return float(pref * abs(kcoef) ** 2 * (self._q_masses[i] ** 2 + self._q_masses[j] ** 2) * Omega)
+        return float(pref * abs(kcoef) ** 2 * (mi ** 2 + mj ** 2) * kin)
 
     # ------------------------------------------------------------------
     # Per-pion summaries
@@ -434,11 +599,13 @@ class DarkPionTChannelFlavourModel(DarkPionTChannelModel):
     T-channel dark pion model in the U(Nf) flavour basis.
 
     Pions are labelled by their dark quark content Q̄_α Q_β.  The decay width
-    formula is (arXiv:1803.08080):
+    formula matches the numerical results of Renner & Schwaller
+    (arXiv:1803.08080) Table 3:
 
-        Γ(π_{αβ} → q_i q̄_j) = Nc fD² m_π / (8π m_X⁴)
+        Γ(π_{αβ} → q_i q̄_j) = Nc fD² m_π / (32π m_X⁴)
                                 × |κ_{αi} κ*_{βj}|²
-                                × (m_i² + m_j²) Ω_{ij}
+                                × (m_i² + m_j²)
+                                × sqrt((1-(mi+mj)²/m²)(1-(mi-mj)²/m²))
 
     This applies uniformly to both diagonal (α=β) and off-diagonal (α≠β) pions.
     Total states: Nf² (U(Nf), includes the singlet direction).
@@ -587,3 +754,4 @@ class DarkPionTChannelFlavourModel(DarkPionTChannelModel):
                   f"(fastest-decaying species)")
 
         print("=" * 72)
+
