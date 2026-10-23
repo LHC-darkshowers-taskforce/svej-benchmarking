@@ -12,7 +12,8 @@ Data sources (mutually exclusive):
 
 For real MadGraph runs, c·τ is read from the run directory name if it follows
 the submit_grid.py naming convention (…_ctau<value>…); otherwise it is
-computed from κ and the model parameters via DarkPionModel.
+computed from κ and the model parameters via DarkPionTChannelModel
+(SU(4), universal κ).
 
 Usage
 -----
@@ -121,10 +122,11 @@ def _parse_run_dir(run_dir: str, mpiD: float, fD: float | None, species: str) ->
         parsed["ctau_mm"] = float(ctau_m.group(1))
     else:
         try:
-            from dark_pion_widths import DarkPionModel
+            from dark_pion_widths import DarkPionTChannelModel
             fD_val = fD if fD is not None else mpiD
-            model  = DarkPionModel(fD=fD_val, m_piD=mpiD,
-                                   m_X=parsed["mXd_GeV"], kappa=parsed["kappa"])
+            model  = DarkPionTChannelModel(fD=fD_val, m_piD=mpiD,
+                                           m_X=parsed["mXd_GeV"], kappa=parsed["kappa"],
+                                           Nf=4, kappa_mode="universal")
             if species == "T15":
                 parsed["ctau_mm"] = model.ctau_diag_mm(14)
             elif species == "(0,1)":
