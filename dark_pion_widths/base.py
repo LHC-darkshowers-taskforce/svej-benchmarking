@@ -13,6 +13,46 @@ import numpy as np
 HBAR_C_GEV_MM = 1.973269788e-13   # ℏc  in GeV·mm
 HBAR_GEV_S    = 6.582119569e-25   # ℏ   in GeV·s
 
+# Lightest meson for each quark–antiquark flavour pair [GeV] (PDG).  Keys are
+# sorted flavour labels; flavour-neutral light pairs use the π⁰ and η.
+_LIGHTEST_MESON: dict[tuple[str, str], float] = {
+    ("d", "d"): 0.1350, ("u", "u"): 0.1350, ("d", "u"): 0.1396,   # π
+    ("s", "s"): 0.5479,                                           # η
+    ("d", "s"): 0.4976, ("s", "u"): 0.4937,                       # K
+    ("c", "c"): 2.9839,                                           # η_c
+    ("c", "d"): 1.8697, ("c", "u"): 1.8648, ("c", "s"): 1.9683,   # D, D_s
+    ("b", "b"): 9.3987,                                           # η_b
+    ("b", "d"): 5.2797, ("b", "u"): 5.2793, ("b", "s"): 5.3669,   # B, B_s
+    ("b", "c"): 6.2745,                                           # B_c
+}
+_M_PI0 = 0.1350
+
+
+def _lightest_meson(qi: str, qj: str) -> float | None:
+    return _LIGHTEST_MESON.get(tuple(sorted((qi, qj))))
+
+
+def hadron_threshold(qi: str, qj: str) -> float | None:
+    """
+    Lightest two-meson final state that a q_i q̄_j pair can hadronise into [GeV].
+
+    A quark pair from the pion decay must end up in at least two hadrons: either
+    the (q_i q̄_j) meson plus a pion, or (q_i ℓ̄)(ℓ q̄_j) with a light ℓ = u, d
+    popped from the vacuum.  E.g. b s̄ → B_s π (5.50), b d̄ → B π (5.41),
+    b b̄ → η_b π (9.53), s s̄ → η π (0.68).  Quantum-number selection rules are
+    ignored (the chiral coupling does not conserve parity).
+
+    Returns None for flavours without a hadron table entry (e.g. t), in which
+    case only the parton-level threshold applies.
+    """
+    direct = _lightest_meson(qi, qj)
+    if direct is None:
+        return None
+    via_light = [
+        _lightest_meson(qi, l) + _lightest_meson(l, qj) for l in ("u", "d")
+    ]
+    return min(direct + _M_PI0, *via_light)
+
 
 class DarkPionModelBase(ABC):
     """
@@ -32,6 +72,13 @@ class DarkPionModelBase(ABC):
         Number of SM colours (default 3).
     sm_quarks : dict
         SM quark masses {label: mass_GeV}.  Must be provided by the subclass.
+    hadron_thresholds : bool
+        When True (default), a decay channel π → q_i q̄_j is open only if m_piD
+        exceeds the lightest two-meson final state with that flavour content
+        (see hadron_threshold), in addition to the parton-level threshold
+        m_i + m_j.  Without it, e.g. a 5 GeV pion "decays" to b s̄ at parton
+        level although no b-hadron final state is kinematically allowed, and the
+        b channel then dominates the helicity-suppressed width.
     mix_diagonal : bool
         When True (default), dark QCD interactions mix all diagonal pions into
         each other faster than they decay.  All diagonal pions therefore share
@@ -53,6 +100,7 @@ class DarkPionModelBase(ABC):
         Nc: int = 3,
         sm_quarks: dict | None = None,
         mix_diagonal: bool = True,
+        hadron_thresholds: bool = True,
     ) -> None:
         self.fD    = float(fD)
         self.m_piD = float(m_piD)
@@ -67,7 +115,18 @@ class DarkPionModelBase(ABC):
         self._q_masses  = np.array(list(self.sm_quarks.values()), dtype=float)
         self._nq        = len(self._q_masses)
 
-        self.mix_diagonal = bool(mix_diagonal)
+        self.mix_diagonal      = bool(mix_diagonal)
+        self.hadron_thresholds = bool(hadron_thresholds)
+
+    def channel_open(self, i: int, j: int) -> bool:
+        """Whether π → q_i q̄_j is kinematically open (see hadron_thresholds)."""
+        if self.m_piD <= self._q_masses[i] + self._q_masses[j]:
+            return False
+        if self.hadron_thresholds:
+            thr = hadron_threshold(self._q_labels[i], self._q_labels[j])
+            if thr is not None and self.m_piD <= thr:
+                return False
+        return True
 
     # ------------------------------------------------------------------
     # Abstract interface
