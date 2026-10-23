@@ -1,6 +1,6 @@
 # t-channel continuum: dark quark pair + 0,1,2 jets, MLM merged.
 #
-# $$ x forbids the mediator in s-channel, removing the on-shell production that
+# $$ x x~ forbids the mediator (and anti-mediator) in s-channel, removing the on-shell production that
 # mediator_onshell.txt now covers. The t-channel x exchange - which IS the
 # production mechanism for this sample - is untouched by the veto.
 #
@@ -16,8 +16,8 @@ import model ./models/t-channel_dark_QCD/darkQCD_fv_down
 
 define qd = dDark1 dDark1~ dDark2 dDark2~ dDark3 dDark3~
 
-generate    p p > qd qd     $$ x
-add process p p > qd qd j   $$ x
-add process p p > qd qd j j $$ x
+generate    p p > qd qd     $$ x x~
+add process p p > qd qd j   $$ x x~
+add process p p > qd qd j j $$ x x~
 
 output mg5_output/dark_quark_pair_multijet
