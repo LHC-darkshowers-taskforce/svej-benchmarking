@@ -22,3 +22,6 @@ ME5_debug
 # Scratch
 py.py
 submit_test.sh
+
+# site-specific analysis settings
+analysis/env.local.sh

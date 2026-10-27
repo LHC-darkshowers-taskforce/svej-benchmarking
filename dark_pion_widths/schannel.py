@@ -109,10 +109,12 @@ class DarkPionSChannelModel(DarkPionModelBase):
         Nc: int = 3,
         sm_quarks: Optional[dict] = None,
         mix_diagonal: bool = True,
+        hadron_thresholds: bool = True,
     ) -> None:
         resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_SM_QUARKS)
         super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc,
-                         sm_quarks=resolved_quarks, mix_diagonal=mix_diagonal)
+                         sm_quarks=resolved_quarks, mix_diagonal=mix_diagonal,
+                         hadron_thresholds=hadron_thresholds)
 
         self.m_Zp = float(m_Zp)
         self.g_qd = float(g_qd)
@@ -176,7 +178,7 @@ class DarkPionSChannelModel(DarkPionModelBase):
         """
         mq  = self._q_masses[q_idx]
         Aa  = self._anomaly_factors[a]
-        if abs(Aa) < 1e-15 or 2 * mq >= self.m_piD:
+        if abs(Aa) < 1e-15 or not self.channel_open(q_idx, q_idx):
             return 0.0
 
         r    = mq ** 2 / self.m_piD ** 2
@@ -235,7 +237,7 @@ class DarkPionSChannelModel(DarkPionModelBase):
         if abs(Ba) < 1e-15:
             return 0.0
         mq = self._q_masses[q_idx]
-        if 2 * mq >= self.m_piD:
+        if not self.channel_open(q_idx, q_idx):
             return 0.0
         beta = np.sqrt(1.0 - 4.0 * mq ** 2 / self.m_piD ** 2)
         # Trace factor Tr[γ⁵(k̸₂-mq)γ⁵(k̸₁+mq)] = -2m_piD² contributes m_piD to numerator

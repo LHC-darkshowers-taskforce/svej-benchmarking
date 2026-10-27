@@ -13,7 +13,7 @@ Results are printed as a formatted table and saved to kappa_solutions.csv.
 """
 
 import numpy as np
-from dark_pion_widths import DarkPionModel
+from dark_pion_widths import DarkPionTChannelModel
 
 # ---------------------------------------------------------------------------
 # Parameter grid
@@ -49,7 +49,8 @@ rows = []
 for mX in MX_VALS:
     for mpiD in MPID_VALS:
         fD = float(mpiD)
-        model_ref = DarkPionModel(fD=fD, m_piD=mpiD, m_X=mX, kappa=1.0)
+        model_ref = DarkPionTChannelModel(fD=fD, m_piD=mpiD, m_X=mX, kappa=1.0,
+                                          Nf=4, kappa_mode="universal")
 
         for spec_label, getter in SPECIES:
             ctau_ref = getter(model_ref)

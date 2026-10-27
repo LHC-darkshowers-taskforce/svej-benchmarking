@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 
-from dark_pion_widths import DarkPionModel
+from dark_pion_widths import DarkPionTChannelModel
 from plotting_utils import apply_style, save_fig
 
 apply_style()
@@ -57,7 +57,8 @@ kappa_grid = np.full((n_spec, n_mX, n_mpiD, n_ctau), np.nan)
 for si, (spec_label, getter) in enumerate(SPECIES):
     for xi, mX in enumerate(MX_VALS):
         for pi, mpiD in enumerate(MPID_VALS):
-            model = DarkPionModel(fD=float(mpiD), m_piD=mpiD, m_X=mX, kappa=1.0)
+            model = DarkPionTChannelModel(fD=float(mpiD), m_piD=mpiD, m_X=mX, kappa=1.0,
+                                          Nf=4, kappa_mode="universal")
             ctau_ref = getter(model)
             for ci, ctau_t in enumerate(CTAU_TARGETS):
                 kappa_grid[si, xi, pi, ci] = _solve(ctau_ref, ctau_t)

@@ -76,6 +76,9 @@ class DarkPionTChannelModel(DarkPionModelBase):
     mix_diagonal : bool
         When True (default), all diagonal pions share the minimum individual
         ctau.  See base class docstring for details.
+    hadron_thresholds : bool
+        When True (default), close channels below the lightest two-meson final
+        state.  See base class docstring for details.
     """
 
     def __init__(
@@ -90,10 +93,12 @@ class DarkPionTChannelModel(DarkPionModelBase):
         Nc: int = 3,
         sm_quarks: dict | None = None,
         mix_diagonal: bool = True,
+        hadron_thresholds: bool = True,
     ) -> None:
         resolved_quarks = dict(sm_quarks) if sm_quarks is not None else dict(DEFAULT_QUARKS)
         super().__init__(fD=fD, m_piD=m_piD, Nf=Nf, Nd=Nd, Nc=Nc,
-                         sm_quarks=resolved_quarks, mix_diagonal=mix_diagonal)
+                         sm_quarks=resolved_quarks, mix_diagonal=mix_diagonal,
+                         hadron_thresholds=hadron_thresholds)
 
         self.m_X        = float(m_X)
         self.kappa      = complex(kappa)
@@ -172,6 +177,8 @@ class DarkPionTChannelModel(DarkPionModelBase):
         """
         if alpha >= self.Nf or beta >= self.Nf:
             return 0.0
+        if not self.channel_open(i, j):
+            return 0.0
         Omega = self._omega(self._q_masses[i], self._q_masses[j])
         if Omega == 0.0:
             return 0.0
@@ -193,6 +200,8 @@ class DarkPionTChannelModel(DarkPionModelBase):
         for alpha in range(self.Nf):
             for beta in range(self.Nf):
                 amp += self._kmat[alpha, i] * np.conj(self._kmat[beta, j]) * T[alpha, beta]
+        if not self.channel_open(i, j):
+            return 0.0
         Omega = self._omega(self._q_masses[i], self._q_masses[j])
         if Omega == 0.0:
             return 0.0
@@ -203,22 +212,100 @@ class DarkPionTChannelModel(DarkPionModelBase):
         """
         Partial width Γ(π_{αβ} → q_i q̄_j) in the flavour basis  [GeV].
 
-        Applies uniformly to both diagonal (α=β) and off-diagonal (α≠β) pions.
-        Formula from arXiv:1803.08080:
+        Applies uniformly to both diagonal (α=β) and off-diagonal (α≠β) pions:
 
-            Γ = Nc fD² m_π / (8π m_X⁴)  ×  |κ_{αi} κ*_{βj}|²  ×  (m_i² + m_j²) Ω_{ij}
+            Γ = Nc fD² m_π / (128π m_X⁴)  ×  |κ_{αi} κ*_{βj}|²  ×  (m_i² + m_j²) Ω_{ij}
+
+        fD uses the standard normalisation ⟨0|Q̄ γ_μ γ5 T^a Q|π^b⟩ = i fD δ^{ab} p_μ
+        (Tr T^a T^b = δ^{ab}/2, i.e. f_π ≈ 92 MeV in QCD), the same as the
+        generator-basis model, for which π^(α,β) gives exactly this width.
+        arXiv:1803.08080 (Eq. for Γ_{αβij}) has 1/(8π): its chiral Lagrangian,
+        U_D = exp(2iΠ_D/f_D) with Π_D = π^a λ^a and coefficient f_D²/(2 M_X²),
+        corresponds to a decay constant 4x the standard one, so its widths are
+        16x ours at the same numerical fD.
 
         Parameters
         ----------
         alpha, beta : dark-flavor indices labelling pion Q̄_α Q_β.
         i, j        : SM quark indices.
         """
+        if not self.channel_open(i, j):
+            return 0.0
         Omega = self._omega(self._q_masses[i], self._q_masses[j])
         if Omega == 0.0:
             return 0.0
-        pref  = self.Nc * self.fD ** 2 * self.m_piD / (8 * np.pi * self.m_X ** 4)
+        pref  = self.Nc * self.fD ** 2 * self.m_piD / (128 * np.pi * self.m_X ** 4)
         kcoef = self._kmat[alpha, i] * np.conj(self._kmat[beta, j])
         return float(pref * abs(kcoef) ** 2 * (self._q_masses[i] ** 2 + self._q_masses[j] ** 2) * Omega)
+
+    # ------------------------------------------------------------------
+    # Decay eigenstates of the degenerate adjoint multiplet
+    # ------------------------------------------------------------------
+
+    def width_matrix(self) -> tuple[np.ndarray, list]:
+        """
+        Decay-width matrix Γ_ab over all Nf²-1 generator states [GeV].
+
+        A(π^a → q_i q̄_j) ∝ A^a_ij = Σ_{αβ} κ_{αi} κ*_{βj} T^a_{αβ}, so
+            Γ_ab = Σ_{ij} w_ij A^a_ij A^b*_ij,
+            w_ij = Nc fD² m_π (m_i² + m_j²) Ω_ij / (64π m_X⁴)
+        with the same normalisation as gamma_diag (Γ_aa = Σ_ij gamma_diag(a,i,j)).
+        The pions are mass-degenerate, so the physical decay eigenstates are the
+        eigenvectors of Γ, not the flavour or generator states.  E.g. for
+        universal κ (rank one), Γ_ab ∝ v_a v_b with v_a = Tr(J T^a): exactly one
+        combination decays and all others are stable.
+
+        Returns (Γ, channels) with channels the list of (i, j) used.
+        """
+        n = self.Nf ** 2 - 1
+        pref = self.Nc * self.fD ** 2 * self.m_piD / (64 * np.pi * self.m_X ** 4)
+        G = np.zeros((n, n), dtype=complex)
+        channels = []
+        self._eig_amp = {}
+        for i in range(self._nq):
+            for j in range(self._nq):
+                if not self.channel_open(i, j):
+                    continue
+                Omega = self._omega(self._q_masses[i], self._q_masses[j])
+                if Omega == 0.0:
+                    continue
+                w = pref * (self._q_masses[i] ** 2 + self._q_masses[j] ** 2) * Omega
+                A = np.array([np.sum(np.outer(self._kmat[:, i], np.conj(self._kmat[:, j])) * T)
+                              for T in self._Tlist])
+                G += w * np.outer(A, np.conj(A))
+                channels.append((i, j))
+                self._eig_amp[(i, j)] = (w, A)
+        return G, channels
+
+    def decay_eigenstates(self, rel_tol: float = 1e-9) -> list[dict]:
+        """
+        Diagonalise the width matrix.  Returns one dict per eigenstate, sorted by
+        decreasing width:
+            vec      : eigenvector in the generator basis (length Nf²-1)
+            total    : Γ_k [GeV] (0 → stable)
+            ctau_mm  : cτ [mm] (inf if stable)
+            br       : {(i, j): BR}
+        Widths below rel_tol × the largest width are treated as exactly zero
+        (they are zero up to rounding, e.g. the stable states for universal κ).
+        """
+        G, channels = self.width_matrix()
+        vals, vecs = np.linalg.eigh(G)
+        gmax = max(vals.max(), 0.0)
+        out = []
+        for k in np.argsort(vals)[::-1]:
+            g = float(vals[k]) if vals[k] > rel_tol * gmax else 0.0
+            v = vecs[:, k]
+            br = {}
+            if g > 0:
+                for ij in channels:
+                    w, A = self._eig_amp[ij]
+                    gk = w * abs(np.vdot(A, v)) ** 2       # A_f · v (A is a row of amplitudes)
+                    if gk > 0:
+                        br[ij] = gk / g
+            out.append({"vec": v, "total": g,
+                        "ctau_mm": HBAR_C_GEV_MM / g if g > 0 else np.inf,
+                        "br": br})
+        return out
 
     # ------------------------------------------------------------------
     # Per-pion summaries
@@ -234,7 +321,9 @@ class DarkPionTChannelModel(DarkPionModelBase):
         """
         Widths, branching ratios, and lifetime for the off-diagonal pion (α,β).
 
-        Partial widths via gamma_off_diag, summed over i ≤ j.
+        Partial widths via gamma_off_diag, summed over all ordered (i, j):
+        q_i q̄_j and q_j q̄_i are distinct final states with different
+        amplitudes (κ_{αi}κ*_{βj} vs κ_{αj}κ*_{βi}).
 
         Returns
         -------
@@ -242,7 +331,7 @@ class DarkPionTChannelModel(DarkPionModelBase):
         """
         channels: dict = {}
         for i in range(self._nq):
-            for j in range(i, self._nq):
+            for j in range(self._nq):
                 g = self.gamma_off_diag(alpha, beta, i, j)
                 if g > 0:
                     channels[(i, j)] = g
@@ -434,9 +523,10 @@ class DarkPionTChannelFlavourModel(DarkPionTChannelModel):
     T-channel dark pion model in the U(Nf) flavour basis.
 
     Pions are labelled by their dark quark content Q̄_α Q_β.  The decay width
-    formula is (arXiv:1803.08080):
+    formula (arXiv:1803.08080 structure, standard fD normalisation; see
+    gamma_flavour) is:
 
-        Γ(π_{αβ} → q_i q̄_j) = Nc fD² m_π / (8π m_X⁴)
+        Γ(π_{αβ} → q_i q̄_j) = Nc fD² m_π / (128π m_X⁴)
                                 × |κ_{αi} κ*_{βj}|²
                                 × (m_i² + m_j²) Ω_{ij}
 
@@ -468,11 +558,13 @@ class DarkPionTChannelFlavourModel(DarkPionTChannelModel):
         Nc: int = 3,
         sm_quarks: dict | None = None,
         mix_diagonal: bool = True,
+        hadron_thresholds: bool = True,
     ) -> None:
         super().__init__(
             fD=fD, m_piD=m_piD, m_X=m_X, kappa=kappa,
             Nf=Nf, kappa_mode=kappa_mode, Nd=Nd, Nc=Nc,
             sm_quarks=sm_quarks, mix_diagonal=mix_diagonal,
+            hadron_thresholds=hadron_thresholds,
         )
 
     # ------------------------------------------------------------------

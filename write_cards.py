@@ -31,7 +31,9 @@ import os
 import sys
 import numpy as np
 
-from dark_pion_widths import DarkPionTChannelModel, DIAGONAL_PION_INDICES
+from dark_pion_widths import (DarkPionTChannelModel, DarkPionTChannelFlavourModel,
+                              DIAGONAL_PION_INDICES, HBAR_C_GEV_MM)
+from dark_pion_widths.generators import get_diagonal_indices, get_diagonal_names
 
 # ---------------------------------------------------------------------------
 # PDG conventions for this model (darkQCD_fv_down: down-type mediator)
@@ -39,6 +41,11 @@ from dark_pion_widths import DarkPionTChannelModel, DIAGONAL_PION_INDICES
 
 # SM quark model index → PDG code  (d, s, b)
 _QUARK_PDG = {0: 1, 1: 3, 2: 5}
+
+# Pythia's own quark masses (ParticleData m0), used when it decays a pion with
+# meMode 91.  A channel below m_i + m_j here fails in Pythia, which then
+# retries and silently reweights the BRs toward the remaining channels.
+_PYTHIA_QUARK_M0 = {1: 0.33, 3: 0.50, 5: 4.80}
 
 # Off-diagonal dark pion (alpha, beta) → Pythia PDG  (decaying species)
 _OFFDIAG_PDG = {(0, 1): 4900211, (0, 2): 4900311, (1, 2): 4900321}
@@ -72,18 +79,51 @@ _MEDIATOR_PDG = 4900001
 # Kappa solver
 # ---------------------------------------------------------------------------
 
+def _diag_index(m, name: str) -> int:
+    """Generator index of a named diagonal pion (T3, T8, T15) for model.Nf."""
+    for b, n in get_diagonal_names(m.Nf).items():
+        if n == name:
+            return b
+    raise ValueError(f"No diagonal pion {name} for Nf = {m.Nf}")
+
+
+def _decaying_ctaus(model) -> list:
+    res = model.compute_all()
+    return [r["ctau_mm"] for r in list(res["diagonal"].values()) + list(res["off_diagonal"].values())
+            if np.isfinite(r["ctau_mm"])]
+
+
+def _eig_ctaus(model) -> list:
+    return [e["ctau_mm"] for e in model.decay_eigenstates() if np.isfinite(e["ctau_mm"])]
+
+
 _SPECIES_GETTERS = {
-    "T15":   lambda m: m.ctau_diag_mm(14),
-    "T8":    lambda m: m.ctau_diag_mm(13),
-    "T3":    lambda m: m.ctau_diag_mm(12),
+    "T15":   lambda m: m.ctau_diag_mm(_diag_index(m, "T15")),
+    "T8":    lambda m: m.ctau_diag_mm(_diag_index(m, "T8")),
+    "T3":    lambda m: m.ctau_diag_mm(_diag_index(m, "T3")),
     "(0,1)": lambda m: m.ctau_off_diag_mm(0, 1),
     "(0,2)": lambda m: m.ctau_off_diag_mm(0, 2),
     "(1,2)": lambda m: m.ctau_off_diag_mm(1, 2),
+    # Longest-lived decaying flavour state (stable ones, cτ = ∞, are skipped).
+    # All species scale as κ⁻⁴, so the same species is longest at every κ.
+    "longest": lambda m: max(_decaying_ctaus(m), default=np.inf),
+    # Diagonal pion lifetime in either basis (with mixing: the common value)
+    "diag": lambda m: min((r["ctau_mm"] for r in m.compute_all()["diagonal"].values()),
+                          default=np.inf),
+    # Decay eigenstates (use with --decay-basis eigen)
+    "eig_longest":  lambda m: max(_eig_ctaus(m), default=np.inf),
+    "eig_shortest": lambda m: min(_eig_ctaus(m), default=np.inf),
 }
 
 
+def _model_class(pion_basis: str):
+    return DarkPionTChannelFlavourModel if pion_basis == "flavour" else DarkPionTChannelModel
+
+
 def solve_kappa(fD: float, mPiD: float, mXd: float, ctau_target: float,
-                species: str = "T15", kappa_mode: str = "universal") -> float:
+                species: str = "T15", kappa_mode: str = "universal",
+                Nf: int = 4, mix_diagonal: bool = True,
+                pion_basis: str = "generator") -> float:
     """
     Compute κ such that the specified pion species has c·τ = ctau_target (mm).
     Uses the exact scaling c·τ ∝ κ⁻⁴ evaluated at κ = 1.
@@ -91,9 +131,9 @@ def solve_kappa(fD: float, mPiD: float, mXd: float, ctau_target: float,
     if species not in _SPECIES_GETTERS:
         raise ValueError(f"Unknown species '{species}'. "
                          f"Choose from: {list(_SPECIES_GETTERS)}")
-    ref_model = DarkPionTChannelModel(
-        fD=fD, m_piD=mPiD, m_X=mXd, kappa=1.0,
-        kappa_mode=kappa_mode,
+    ref_model = _model_class(pion_basis)(
+        fD=fD, m_piD=mPiD, m_X=mXd, kappa=1.0, Nf=Nf,
+        kappa_mode=kappa_mode, mix_diagonal=mix_diagonal,
     )
     ctau_ref = _SPECIES_GETTERS[species](ref_model)
     if not np.isfinite(ctau_ref) or ctau_ref <= 0:
@@ -157,6 +197,21 @@ def write_param_card(path: str, mXd: float, mDarkQ: float, kappa: float,
         k31, k32, k33 = k, z, z
     else:
         raise ValueError(f"Unknown kappa_mode '{kappa_mode}'")
+
+    # Mediator width written explicitly rather than "Auto": MG5's auto-width
+    # zeroes every partial width below 0.1 GeV for a coloured particle, which
+    # at small kappa (e.g. m_X = 1 TeV, long ctau) sets the whole width to 0.
+    # Same two-body formula as the UFO's decays.py, with the masses below.
+    sm_masses = [5.04e-3, 1.01e-1, 4.7]          # MD, MS, MB in this card
+    kmat = [[k11, k12, k13], [k21, k22, k23], [k31, k32, k33]]
+    width_x = 0.0
+    for row in kmat:
+        for kai, mq in zip(row, sm_masses):
+            lam = (mXd**4 + mq**4 + mDarkQ**4 - 2 * mXd**2 * mq**2
+                   - 2 * mXd**2 * mDarkQ**2 - 2 * mq**2 * mDarkQ**2)
+            if lam > 0:
+                width_x += (kai**2 * (mXd**2 - mq**2 - mDarkQ**2) * np.sqrt(lam)
+                            / (16 * np.pi * mXd**3))
 
     content = f"""\
 ######################################################################
@@ -234,7 +289,7 @@ DECAY   6 1.508336e+00 # WT
 DECAY  23 2.495200e+00 # WZ
 DECAY  24 2.085000e+00 # WW
 DECAY  25 4.070000e-03 # WH
-DECAY 4900001 Auto # WidthX
+DECAY 4900001 {width_x:.6e} # WidthX (analytic; MG5 Auto zeroes partial widths < 0.1 GeV)
 """
     with open(path, "w") as f:
         f.write(content)
@@ -262,8 +317,16 @@ def _build_med_channels(model: "DarkPionTChannelModel") -> list:
 
 def write_pythia_card(path: str, model: DarkPionTChannelModel, mXd: float,
                       mDarkQ: float, mRhoD: float, LambdaD: float,
-                      lhe_file: str) -> None:
+                      lhe_file: str, merged: bool = True,
+                      decay_basis: str = "flavour", xqcut: float = 120.0) -> None:
     """Write Pythia 8 input card with computed masses, lifetimes, and BRs.
+
+    Supports Nf = 3 and 4 (model.Nf).  decay_basis selects how the
+    mass-degenerate dark pions decay, see _dark_hadron_section.
+
+    merged=True adds the MLM veto matching the run card (ickkw = 1,
+    xqcut, maxjetflavor = 4).  The on-shell sample is unmerged and relies
+    on the shower alone for extra radiation.  ISR and MPI are on for both.
 
     Uses the generator basis (SU(4) adjoint pions T3/T8/T15).  The 4th
     diagonal pion (4900441, κ=0 direction) is stable.
@@ -271,46 +334,46 @@ def write_pythia_card(path: str, model: DarkPionTChannelModel, mXd: float,
     results = model.compute_all()
     mPiD    = model.m_piD
 
-    # Generator-basis diagonal pions: T3=12, T8=13, T15=14
-    ctau_diag = {b: model.ctau_diag_mm(b) for b in DIAGONAL_PION_INDICES}
-    br_diag   = {b: results["diagonal"][b]["br"]
-                 for b in DIAGONAL_PION_INDICES if b in results["diagonal"]}
+    # Pythia's HV string fragmentation scales its parameters (bmqv2, sigmamqv)
+    # with the dark-quark mass and expects a constituent mass of order Lambda,
+    # m_i + m_j = (3 m_rho + m_pi) / 4.  MG5 keeps the Lagrangian mass mDarkQ;
+    # Pythia keeps the LHE masses for the hard-process dark quarks.
+    mDarkQ_const = (3.0 * mRhoD + mPiD) / 8.0
 
-    # Off-diagonal pions: (0,1), (0,2), (1,2)
-    ctau_offdiag = {ab: model.ctau_off_diag_mm(*ab)
-                    for ab in [(0, 1), (0, 2), (1, 2)]}
-    br_offdiag   = {ab: results["off_diagonal"][ab]["br"]
-                    for ab in [(0, 1), (0, 2), (1, 2)]
-                    if ab in results["off_diagonal"]}
+    if merged:
+        matching_block = f"""
+! MLM matching for p p > qd qd + 0,1,2 j  (run card: ickkw = 1, xqcut = {xqcut:g})
+JetMatching:merge = on
+JetMatching:scheme = 1               ! MadGraph-style MLM
+JetMatching:setMad = off
+JetMatching:jetAlgorithm = 2         ! SlowJet kT clustering (kT-MLM, as in MG5's Pythia8 cards)
+JetMatching:slowJetPower = 1
+JetMatching:qCut = {1.5 * xqcut:g}              ! 1.5 x xqcut
+JetMatching:nQmatch = 4              ! = maxjetflavor (4-flavour scheme)
+JetMatching:nJetMax = 2
+JetMatching:coneRadius = 1.0
+JetMatching:etaJetMax = 10.0"""
+    else:
+        matching_block = "! Unmerged on-shell sample: no MLM matching (run card: ickkw = 0)"
+
+    # Every channel that can be written below must also be open for Pythia
+    open_channels = {(i, j) for r in list(results["diagonal"].values())
+                     + list(results["off_diagonal"].values()) for (i, j) in r["br"]}
+    open_channels |= {(i, j) for i in range(model._nq) for j in range(model._nq)
+                      if model.channel_open(i, j)}
+    for (i, j) in sorted(open_channels):
+        qi, qj = _QUARK_PDG[i], _QUARK_PDG[j]
+        if mPiD <= _PYTHIA_QUARK_M0[qi] + _PYTHIA_QUARK_M0[qj]:
+            print(f"WARNING: pi_D -> {qi} -{qj} is open in dark_pion_widths but closed "
+                  f"for Pythia at mPiD = {mPiD} GeV (needs > "
+                  f"{_PYTHIA_QUARK_M0[qi] + _PYTHIA_QUARK_M0[qj]:.2f} GeV); Pythia "
+                  f"will fail and retry these decays.", file=sys.stderr)
 
     # Mediator decay channels (kappa_mode-aware, computed from model)
     med_channels = _build_med_channels(model)
 
     # pTminFSR must be strictly greater than Lambda
-    ptmin_fsr = LambdaD * 1.1
-
-    _diag_names = {12: "T3", 13: "T8", 14: "T15"}
-
-    def _diag_lines(b):
-        if b not in br_diag or not br_diag[b]:
-            return f"! {_DIAG_PDG[b]}: no open decay channels"
-        return _br_lines(_DIAG_PDG[b], br_diag[b])
-
-    def _diag_block(b):
-        """Return the full decay block for a diagonal generator-basis pion."""
-        pdg   = _DIAG_PDG[b]
-        name  = _diag_names.get(b, f"T{b}")
-        c     = ctau_diag[b]
-        if not np.isfinite(c) or b not in br_diag or not br_diag[b]:
-            return f"! --- Diagonal dark pion {name} ({pdg}) — stable ---\n{pdg}:mayDecay = off"
-        return (f"! --- Diagonal dark pion {name} ({pdg}), ctau = {c:.4f} mm ---\n"
-                f"{pdg}:tau0 = {c:.6f}\n"
-                f"{_diag_lines(b)}")
-
-    def _offdiag_lines(ab):
-        if ab not in br_offdiag or not br_offdiag[ab]:
-            return f"! {_OFFDIAG_PDG[ab]}: no open decay channels"
-        return _br_lines(_OFFDIAG_PDG[ab], br_offdiag[ab])
+    ptmin_fsr = np.ceil(LambdaD * 1.1e4) / 1e4   # round up so the written value stays >= 1.1 Lambda
 
     # Build mediator channel lines
     med_ch_lines = []
@@ -320,6 +383,8 @@ def write_pythia_card(path: str, model: DarkPionTChannelModel, mXd: float,
             f"{_MEDIATOR_PDG}:{kw} on {br:.6f} 103 {sq}  {dq}"
         )
     med_ch_block = "\n".join(med_ch_lines)
+
+    hadron_section = _dark_hadron_section(model, mPiD, mRhoD, mDarkQ_const, decay_basis)
 
     content = f"""\
 ! Pythia 8 input card generated by write_cards.py
@@ -331,9 +396,11 @@ def write_pythia_card(path: str, model: DarkPionTChannelModel, mXd: float,
 !   kappa_mode    = {model.kappa_mode}
 !   mPiD/LambdaD  = {mPiD/LambdaD:.4f}
 !   LambdaD       = {LambdaD:.4f} GeV
-!   mDarkQ        = {mDarkQ:.4f} GeV
+!   mDarkQ        = {mDarkQ:.4f} GeV  (Lagrangian, MG5 / LHE)
+!   mDarkQ_const  = {mDarkQ_const:.4f} GeV  (constituent, Pythia HV fragmentation)
 !   mRhoD         = {mRhoD:.4f} GeV
-!   pion_basis    = generator  (SU(4) adjoint)
+!   Nf            = {model.Nf}
+!   decay_basis   = {decay_basis}
 
 ! ================================================================
 ! 1) Event generation
@@ -343,12 +410,13 @@ Beams:frameType = 4
 Beams:LHEF = {lhe_file}
 SLHA:allowUserOverride = on
 
-PartonLevel:MPI = off
-PartonLevel:ISR = off
+PartonLevel:MPI = on
+PartonLevel:ISR = on
+{matching_block}
 
 HiddenValley:alphaOrder = 1
 HiddenValley:FSR = on
-HiddenValley:alphaFSR = 0.7
+HiddenValley:alphaFSR = 0.7          ! unused when setLambda = on
 HiddenValley:fragment = on
 
 SpaceShower:QCDshower = on
@@ -364,6 +432,7 @@ HiddenValley:Ngauge = 3
 HiddenValley:nFlav = {model.Nf}
 HiddenValley:probKeepEta1 = 0
 HiddenValley:separateFlav = on
+HiddenValley:setLambda = on          ! otherwise Lambda is ignored and derived from alphaFSR
 HiddenValley:Lambda = {LambdaD:.4f}
 HiddenValley:pTminFSR = {ptmin_fsr:.4f}    ! must be > Lambda
 
@@ -373,7 +442,7 @@ HiddenValley:pTminFSR = {ptmin_fsr:.4f}    ! must be > Lambda
 
 {_MEDIATOR_PDG}:m0 = {mXd:.4f}
 {_MEDIATOR_PDG}:colType = 1
-{_MEDIATOR_PDG}:spinType = 2
+{_MEDIATOR_PDG}:spinType = 1          ! scalar (2s+1)
 {_MEDIATOR_PDG}:isResonance = on
 {_MEDIATOR_PDG}:mayDecay = on
 
@@ -383,182 +452,210 @@ HiddenValley:spinFv = 0
 {med_ch_block}
 {_MEDIATOR_PDG}:0:meMode = 103
 
-! ================================================================
-! 4) Dark quark masses
-! ================================================================
-
-4900101:m0 = {mDarkQ:.4f}
-4900102:m0 = {mDarkQ:.4f}
-4900103:m0 = {mDarkQ:.4f}
-4900104:m0 = {mDarkQ:.4f}
-
-4900101:spinType = 1
-4900102:spinType = 1
-4900103:spinType = 1
-4900104:spinType = 1
-
-4900101:colType = 0
-4900102:colType = 0
-4900103:colType = 0
-4900104:colType = 0
-
-! ================================================================
-! 5) Dark pion masses  (mPiD = {mPiD} GeV, mRhoD = {mRhoD:.4f} GeV)
-! ================================================================
-
-! Diagonal dark pions (generator basis: T3, T8, T15)
-4900111:m0 = {mPiD:.4f}    ! T3
-4900221:m0 = {mPiD:.4f}    ! T8
-4900331:m0 = {mPiD:.4f}    ! T15
-4900441:m0 = {mPiD:.4f}    ! eta-like (stable, kappa=0 direction)
-
-! Diagonal dark rhos
-4900113:m0 = {mRhoD:.4f}
-4900223:m0 = {mRhoD:.4f}
-4900333:m0 = {mRhoD:.4f}
-4900443:m0 = {mRhoD:.4f}
-
-! Off-diagonal dark pions (decaying)
-4900211:m0 = {mPiD:.4f}    ! pi(0,1)
-4900311:m0 = {mPiD:.4f}    ! pi(0,2)
-4900321:m0 = {mPiD:.4f}    ! pi(1,2)
-
-! Off-diagonal dark pions (stable, involve dark flavor 4)
-4900411:m0 = {mPiD:.4f}
-4900421:m0 = {mPiD:.4f}
-4900431:m0 = {mPiD:.4f}
-
-! Off-diagonal dark rhos
-4900213:m0 = {mRhoD:.4f}
-4900313:m0 = {mRhoD:.4f}
-4900323:m0 = {mRhoD:.4f}
-4900413:m0 = {mRhoD:.4f}
-4900423:m0 = {mRhoD:.4f}
-4900433:m0 = {mRhoD:.4f}
-
-! ================================================================
-! 6) Visibility flags (all dark sector particles are invisible)
-! ================================================================
-
-{_MEDIATOR_PDG}:isVisible = off
-
-4900101:isVisible = off
-4900102:isVisible = off
-4900103:isVisible = off
-4900104:isVisible = off
-
-4900111:isVisible = off
-4900221:isVisible = off
-4900331:isVisible = off
-4900441:isVisible = off
-
-4900113:isVisible = off
-4900223:isVisible = off
-4900333:isVisible = off
-4900443:isVisible = off
-
-4900211:isVisible = off
-4900213:isVisible = off
-4900311:isVisible = off
-4900313:isVisible = off
-4900321:isVisible = off
-4900323:isVisible = off
-4900411:isVisible = off
-4900413:isVisible = off
-4900421:isVisible = off
-4900423:isVisible = off
-4900431:isVisible = off
-4900433:isVisible = off
-
-! ================================================================
-! 7) Dark rho decays (into dark pion pairs)
-! ================================================================
-
-4900113:mayDecay = on
-4900223:mayDecay = on
-4900333:mayDecay = on
-4900443:mayDecay = on
-4900213:mayDecay = on
-4900313:mayDecay = on
-4900323:mayDecay = on
-4900413:mayDecay = on
-4900423:mayDecay = on
-4900433:mayDecay = on
-
-4900113:oneChannel on 0.001 91 1 -1
-4900113:addChannel on 0.333 102 4900211 -4900211
-4900113:addChannel on 0.333 102 4900311 -4900311
-4900113:addChannel on 0.333 102 4900411 -4900411
-
-4900223:oneChannel on 0.001 91 1 -1
-4900223:addChannel on 0.333 102 4900211 -4900211
-4900223:addChannel on 0.333 102 4900321 -4900321
-4900223:addChannel on 0.333 102 4900421 -4900421
-
-4900333:oneChannel on 0.001 91 1 -1
-4900333:addChannel on 0.333 102 4900311 -4900311
-4900333:addChannel on 0.333 102 4900321 -4900321
-4900333:addChannel on 0.333 102 4900431 -4900431
-
-4900443:oneChannel on 0.001 91 1 -1
-4900443:addChannel on 0.333 102 4900411 -4900411
-4900443:addChannel on 0.333 102 4900421 -4900421
-4900443:addChannel on 0.333 102 4900431 -4900431
-
-4900213:oneChannel on 0.001 91 1 -1
-4900213:addChannel on 0.4995 102 4900211 4900111
-4900213:addChannel on 0.4995 102 4900211 4900221
-
-4900313:oneChannel on 0.001 91 1 -1
-4900313:addChannel on 0.4995 102 4900311 4900111
-4900313:addChannel on 0.4995 102 4900311 4900331
-
-4900323:oneChannel on 0.001 91 1 -1
-4900323:addChannel on 0.4995 102 4900321 4900221
-4900323:addChannel on 0.4995 102 4900321 4900331
-
-4900413:oneChannel on 0.001 91 1 -1
-4900413:addChannel on 0.4995 102 4900411 4900111
-4900413:addChannel on 0.4995 102 4900411 4900441
-
-4900423:oneChannel on 0.001 91 1 -1
-4900423:addChannel on 0.4995 102 4900421 4900221
-4900423:addChannel on 0.4995 102 4900421 4900441
-
-4900433:oneChannel on 0.001 91 1 -1
-4900433:addChannel on 0.4995 102 4900431 4900331
-4900433:addChannel on 0.4995 102 4900431 4900441
-
-! ================================================================
-! 8) Dark pion decays — lifetimes and branching ratios
-! ================================================================
-
-! --- Stable dark pions (involve dark flavor 4 or kappa=0 direction) ---
-4900441:mayDecay = off
-4900411:mayDecay = off
-4900421:mayDecay = off
-4900431:mayDecay = off
-
-{_diag_block(12)}
-
-{_diag_block(13)}
-
-{_diag_block(14)}
-
-! --- Off-diagonal dark pion pi(0,1) (4900211), ctau = {ctau_offdiag[(0,1)]:.4f} mm ---
-4900211:tau0 = {ctau_offdiag[(0,1)]:.6f}
-{_offdiag_lines((0,1))}
-
-! --- Off-diagonal dark pion pi(0,2) (4900311), ctau = {ctau_offdiag[(0,2)]:.4f} mm ---
-4900311:tau0 = {ctau_offdiag[(0,2)]:.6f}
-{_offdiag_lines((0,2))}
-
-! --- Off-diagonal dark pion pi(1,2) (4900321), ctau = {ctau_offdiag[(1,2)]:.4f} mm ---
-4900321:tau0 = {ctau_offdiag[(1,2)]:.6f}
-{_offdiag_lines((1,2))}
+{hadron_section}
 """
     with open(path, "w") as f:
         f.write(content)
+
+
+# ---------------------------------------------------------------------------
+# Dark hadron section (any Nf, flavour or eigenstate decay basis)
+# ---------------------------------------------------------------------------
+
+def _offdiag_pdg(a: int, b: int, spin: int = 1) -> int:
+    """Pythia HV meson for dark flavours a < b (0-based): 4900ij{1,3}, i > j."""
+    return 4900000 + 100 * (b + 1) + 10 * (a + 1) + spin
+
+
+def _diag_pdg(a: int, spin: int = 1) -> int:
+    return 4900000 + 110 * (a + 1) + spin
+
+
+def _eig_pdg(k: int) -> int:
+    """New Pythia particle for decay eigenstate k (0-based)."""
+    return 4910000 + 10 * (k + 1) + 1
+
+
+def _decay_lines(pdg: int, ctau: float, br: dict, label: str) -> list:
+    if not np.isfinite(ctau) or not br:
+        return [f"! --- {label} ({pdg}) — stable ---", f"{pdg}:mayDecay = off"]
+    out = [f"! --- {label} ({pdg}), ctau = {ctau:.4g} mm ---", f"{pdg}:tau0 = {ctau:.6e}"]
+    first = True
+    for (i, j), b in sorted(br.items(), key=lambda kv: -kv[1]):
+        if b < 1e-7:
+            continue
+        kw = "oneChannel" if first else "addChannel"
+        out.append(f"{pdg}:{kw} on {b:.6f} 91 {_QUARK_PDG[i]} -{_QUARK_PDG[j]}")
+        first = False
+    return out
+
+
+def _routing_lines(pdg: int, probs: list, label: str) -> list:
+    """Prompt one-body decay of a flavour meson into decay eigenstates."""
+    tot = sum(probs)
+    out = [f"! --- {label} ({pdg}) -> decay eigenstates (prompt, one-body) ---",
+           f"{pdg}:tau0 = 0.0", f"{pdg}:mayDecay = on"]
+    first = True
+    for k, pk in enumerate(probs):
+        if pk / tot < 1e-6:
+            continue
+        kw = "oneChannel" if first else "addChannel"
+        out.append(f"{pdg}:{kw} on {pk / tot:.6f} 0 {_eig_pdg(k)}")
+        first = False
+    return out + [""]
+
+
+def _dark_hadron_section(model, mPiD: float, mRhoD: float, mDarkQ_const: float,
+                         decay_basis: str) -> str:
+    """
+    Dark quark masses, dark meson masses/visibility, dark rho decays and dark
+    pion decays for any Nf, as Pythia commands.
+
+    Pythia's HV hadronisation (separateFlav = on) produces flavour mesons:
+    off-diagonal 4900ij1 (i > j) and diagonal 4900ii1, the last diagonal one
+    being the flavour-singlet-like eta_1 (suppressed by probKeepEta1 = 0 and
+    kept stable).  The first Nf-1 diagonal mesons are identified with the
+    diagonal generators (T3, T8, ...).
+
+    decay_basis = "flavour":  each flavour meson decays with the width of the
+        corresponding flavour state (model.compute_all(); diagonal pions follow
+        model.mix_diagonal).
+    decay_basis = "eigen":  the pions are mass degenerate, so the physical
+        decay eigenstates diagonalise the width matrix Γ_ab
+        (model.width_matrix()).  Each eigenstate k becomes a new Pythia
+        particle 4910{k+1}1 with its own lifetime and BRs; each flavour meson
+        decays promptly (one-body, like K0 -> K_S / K_L) into eigenstate k with
+        probability |<k|meson>|^2.  Pythia produces the adjoint states with equal
+        rates, so every eigenstate ends up equally populated.
+    """
+    Nf    = model.Nf
+    pairs = [(a, b) for a in range(Nf) for b in range(a + 1, Nf)]
+    diag_idx = get_diagonal_indices(Nf)
+    names = get_diagonal_names(Nf)
+    L = []
+
+    L += ["! ================================================================",
+          "! 4) Dark quark masses (constituent; the LHE keeps the MG5 mass)",
+          "! ================================================================", ""]
+    for a in range(Nf):
+        q = 4900101 + a
+        L += [f"{q}:m0 = {mDarkQ_const:.4f}", f"{q}:spinType = 2", f"{q}:colType = 0",
+              f"{q}:isVisible = off"]
+    L.append("")
+
+    L += ["! ================================================================",
+          f"! 5) Dark mesons (Nf = {Nf}: mPiD = {mPiD} GeV, mRhoD = {mRhoD:.4f} GeV)",
+          "! ================================================================", ""]
+    mesons = []
+    for a in range(Nf):
+        mesons += [(_diag_pdg(a, 1), mPiD), (_diag_pdg(a, 3), mRhoD)]
+    for a, b in pairs:
+        mesons += [(_offdiag_pdg(a, b, 1), mPiD), (_offdiag_pdg(a, b, 3), mRhoD)]
+    for pdg, m in mesons:
+        L += [f"{pdg}:m0 = {m:.4f}", f"{pdg}:isVisible = off"]
+    L.append("")
+
+    # Dark rho decays into dark pion pairs (flavour-conserving).
+    L += ["! Dark rho decays (prompt, into dark pions)"]
+    for a in range(Nf):
+        rho = _diag_pdg(a, 3)
+        prods = [_offdiag_pdg(min(a, c), max(a, c), 1) for c in range(Nf) if c != a]
+        br = 0.999 / len(prods)
+        L += [f"{rho}:mayDecay = on", f"{rho}:oneChannel on 0.001 91 1 -1"]
+        L += [f"{rho}:addChannel on {br:.4f} 102 {p} -{p}" for p in prods]
+    for a, b in pairs:
+        rho = _offdiag_pdg(a, b, 3)
+        pi  = _offdiag_pdg(a, b, 1)
+        L += [f"{rho}:mayDecay = on", f"{rho}:oneChannel on 0.001 91 1 -1",
+              f"{rho}:addChannel on 0.4995 102 {pi} {_diag_pdg(a, 1)}",
+              f"{rho}:addChannel on 0.4995 102 {pi} {_diag_pdg(b, 1)}"]
+    L.append("")
+
+    L += ["! ================================================================",
+          f"! 6) Dark pion decays  (decay_basis = {decay_basis})",
+          "! ================================================================", ""]
+    flavour_states = isinstance(model, DarkPionTChannelFlavourModel)
+    eta = _diag_pdg(Nf - 1, 1)
+    if not flavour_states and not (decay_basis == "flavour" and model.mix_diagonal):
+        L += [f"! eta_1-like singlet ({eta}): stable", f"{eta}:mayDecay = off", ""]
+
+    if decay_basis == "flavour" and flavour_states:
+        # U(Nf) flavour-basis model (arXiv:1803.08080): Pythia's diagonal
+        # mesons 4900aa1 are the flavour states pi_aa themselves.
+        res = model.compute_all()
+        for a in range(Nf):
+            r = res["diagonal"].get(a, {"ctau_mm": np.inf, "br": {}})
+            L += _decay_lines(_diag_pdg(a, 1), r["ctau_mm"], r["br"],
+                              f"diagonal pion pi({a},{a})") + [""]
+        for a, b in pairs:
+            r = res["off_diagonal"].get((a, b), {"ctau_mm": np.inf, "br": {}})
+            L += _decay_lines(_offdiag_pdg(a, b, 1), r["ctau_mm"], r["br"],
+                              f"off-diagonal pion pi({a},{b})") + [""]
+
+    elif decay_basis == "flavour":
+        res = model.compute_all()
+        for k, b in enumerate(diag_idx):
+            r = res["diagonal"].get(b, {"ctau_mm": np.inf, "br": {}})
+            L += _decay_lines(_diag_pdg(k, 1), r["ctau_mm"], r["br"],
+                              f"diagonal pion {names.get(b, b)}") + [""]
+        if model.mix_diagonal:
+            # Pythia produces flavour states Q_a Q_a~; the highest-coded one is
+            # treated as eta_1 only at string breaks (probKeepEta1).  Each diagonal
+            # flavour state is an adjoint combination plus a 1/Nf singlet part, and
+            # the copies produced in dark-rho decays carry no singlet component, so
+            # with mixed diagonal pions it decays like the other diagonal states.
+            r = min(res["diagonal"].values(), key=lambda x: x["ctau_mm"],
+                    default={"ctau_mm": np.inf, "br": {}})
+            L += _decay_lines(eta, r["ctau_mm"], r["br"],
+                              f"diagonal pion {eta} (common mixed diagonal decay)") + [""]
+        for a, b in pairs:
+            r = res["off_diagonal"].get((a, b), {"ctau_mm": np.inf, "br": {}})
+            L += _decay_lines(_offdiag_pdg(a, b, 1), r["ctau_mm"], r["br"],
+                              f"off-diagonal pion pi({a},{b})") + [""]
+
+    elif decay_basis == "eigen":
+        G, _ = model.width_matrix()
+        if np.max(np.abs(G.imag)) > 1e-9 * max(np.max(np.abs(G.real)), 1e-300):
+            raise ValueError("decay_basis='eigen' needs a real width matrix (real kappa)")
+        # Real eigenvectors, so a meson and its antiparticle (mirrored by Pythia)
+        # have identical eigenstate content.
+        vals, vecs = np.linalg.eigh(G.real)
+        order = np.argsort(vals)[::-1]
+        gmax  = max(vals.max(), 0.0)
+        eig_vecs = []
+        L += ["! Decay eigenstates of the degenerate pion multiplet (new particles)"]
+        for k, idx in enumerate(order):
+            v = vecs[:, idx]
+            g = vals[idx] if vals[idx] > 1e-9 * gmax else 0.0
+            br = {}
+            if g > 0:
+                for ij, (w, A) in model._eig_amp.items():
+                    gk = w * abs(np.dot(A, v)) ** 2
+                    if gk > 0:
+                        br[ij] = gk
+                tot = sum(br.values())
+                br = {ij: x / tot for ij, x in br.items()}
+            ctau = HBAR_C_GEV_MM / g if g > 0 else np.inf
+            pdg = _eig_pdg(k)
+            eig_vecs.append(v)
+            L += [f"{pdg}:new = pivE{k + 1} void 1 0 0 {mPiD:.4f} 0.0 0.0 0.0 0.0",
+                  f"{pdg}:isVisible = off"]
+            L += _decay_lines(pdg, ctau, br, f"eigenstate {k + 1}") + [""]
+
+        n = Nf ** 2 - 1
+        for k, b in enumerate(diag_idx):
+            L += _routing_lines(_diag_pdg(k, 1), [v[b] ** 2 for v in eig_vecs],
+                                f"diagonal pion {names.get(b, b)}")
+        for p, (a, b) in enumerate(pairs):
+            # |ab> = (T_sym - i T_asym)/sqrt2  ->  |<k|ab>|^2 = (v_s^2 + v_a^2)/2
+            s_i, a_i = 2 * p, 2 * p + 1
+            L += _routing_lines(_offdiag_pdg(a, b, 1),
+                                [0.5 * (v[s_i] ** 2 + v[a_i] ** 2) for v in eig_vecs],
+                                f"off-diagonal pion pi({a},{b})")
+    else:
+        raise ValueError(f"unknown decay_basis '{decay_basis}'")
+
+    return "\n".join(L)
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +663,7 @@ HiddenValley:spinFv = 0
 # ---------------------------------------------------------------------------
 
 def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0,
-                   merged: bool = True) -> None:
+                   merged: bool = True, xqcut: float = 120.0) -> None:
     """Write a MadGraph run_card.dat.
 
     merged=True   t-channel continuum (p p > qd qd + 0,1,2j): MLM merging on.
@@ -582,10 +679,10 @@ def write_run_card(path: str, nevents: int = 10000, sqrts: float = 13600.0,
     """
     ebeam = sqrts / 2.0
     if merged:
-        matching_block = """  1    = ickkw
+        matching_block = f"""  1    = ickkw
   T    = cut_decays
   0.0  = drjj
-  20   = xqcut"""
+  {xqcut:g}   = xqcut"""
     else:
         matching_block = """  0    = ickkw
   T    = cut_decays
@@ -728,51 +825,41 @@ echo "Done.  Events are in $PROCESS_DIR/Events/"
 # ---------------------------------------------------------------------------
 
 def print_summary(model: DarkPionTChannelModel, mXd: float, species: str,
-                  kappa: float, kappa_source: str, ctau_source: str) -> None:
-    results      = model.compute_all()
-    labels       = results["quark_labels"]
-    ctau_species = _SPECIES_GETTERS[species](model)
-    _DIAG_NAMES  = {12: "T3", 13: "T8", 14: "T15"}
+                  kappa: float, kappa_source: str, ctau_source: str,
+                  decay_basis: str = "flavour") -> None:
+    results = model.compute_all()
+    labels  = results["quark_labels"]
+    names   = get_diagonal_names(model.Nf)
 
-    print(f"\n{'='*60}")
-    print(f"  Parameter point summary  (generator basis)")
-    print(f"{'='*60}")
-    print(f"  mXd    = {mXd} GeV")
-    print(f"  mPiD   = {model.m_piD} GeV")
-    print(f"  fD     = {model.fD} GeV")
+    def _brs(br):
+        return ", ".join(f"{labels[i]}{labels[j]}bar {b:.3f}"
+                         for (i, j), b in sorted(br.items(), key=lambda kv: -kv[1]) if b > 1e-3)
+
+    print(f"\n{'='*72}")
+    print(f"  Parameter point summary  (Nf = {model.Nf}, kappa_mode = {model.kappa_mode}, "
+          f"decay_basis = {decay_basis})")
+    print(f"{'='*72}")
+    print(f"  mXd = {mXd} GeV,  mPiD = {model.m_piD} GeV,  fD = {model.fD} GeV")
     print(f"  κ = {kappa:.6f}  ({kappa_source})")
-    print(f"  c·τ ({species}) = {ctau_species:.4f} mm  ({ctau_source})")
-    print()
-
-    print("  Diagonal dark pions (T3/T8/T15):")
-    for b in DIAGONAL_PION_INDICES:
-        if b in results["diagonal"]:
-            r    = results["diagonal"][b]
-            name = _DIAG_NAMES.get(b, f"T{b}")
-            print(f"    {name}  ctau = {r['ctau_mm']:.4f} mm  "
-                  f"total Γ = {r['total']:.3e} GeV")
-            for (i, j), br in r["br"].items():
-                if br > 1e-4:
-                    ql = labels[i] if i < len(labels) else str(i)
-                    qr = labels[j] if j < len(labels) else str(j)
-                    print(f"           BR({ql}{qr}) = {br:.4f}")
-    print(f"    4900441 (eta-like)  stable (κ=0 direction)")
-
-    print()
-    print("  Off-diagonal dark pions:")
-    for ab in [(0, 1), (0, 2), (1, 2)]:
-        if ab in results["off_diagonal"]:
-            r    = results["off_diagonal"][ab]
-            a, b = ab
-            print(f"    π({a},{b})  ctau = {r['ctau_mm']:.4f} mm  "
-                  f"total Γ = {r['total']:.3e} GeV")
-            for (i, j), br in r["br"].items():
-                if br > 1e-4:
-                    ql = labels[i] if i < len(labels) else str(i)
-                    qr = labels[j] if j < len(labels) else str(j)
-                    print(f"           BR({ql}{qr}) = {br:.4f}")
-
-    print(f"{'='*60}\n")
+    print(f"  c·τ ({species}) = {_SPECIES_GETTERS[species](model):.4g} mm  ({ctau_source})")
+    if decay_basis == "eigen":
+        eig = model.decay_eigenstates()
+        n_dec = sum(e["total"] > 0 for e in eig)
+        print(f"  Decay eigenstates: {n_dec}/{len(eig)} decay")
+        for k, e in enumerate(eig):
+            if e["total"] > 0:
+                print(f"    E{k + 1}: ctau = {e['ctau_mm']:.4g} mm  [{_brs(e['br'])}]")
+    else:
+        flav = isinstance(model, DarkPionTChannelFlavourModel)
+        diag_keys = range(model.Nf) if flav else get_diagonal_indices(model.Nf)
+        for b in diag_keys:
+            r = results["diagonal"].get(b)
+            lab = f"π({b},{b})" if flav else names.get(b, b)
+            print(f"    {lab:>6}: " + (f"ctau = {r['ctau_mm']:.4g} mm  [{_brs(r['br'])}]"
+                                       if r else "stable"))
+        for ab, r in results["off_diagonal"].items():
+            print(f"    π{ab}: ctau = {r['ctau_mm']:.4g} mm  [{_brs(r['br'])}]")
+    print(f"{'='*72}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -798,8 +885,9 @@ def parse_args():
                    help="m_piD / Λ_D ratio (default: 0.6).  "
                         "Sets Λ_D, m_qD, and m_ρD via chiral-scaling relations.")
     p.add_argument("--mDarkQ", type=float, default=None,
-                   help="Dark quark mass [GeV] (overrides chiral-scaling default "
-                        "derived from --r-piD)")
+                   help="Lagrangian dark quark mass [GeV] used in MadGraph (overrides "
+                        "chiral-scaling default derived from --r-piD).  Pythia uses the "
+                        "constituent mass (3 m_rhoD + m_piD) / 8 for fragmentation.")
     p.add_argument("--mRhoD", type=float, default=None,
                    help="Dark rho meson mass [GeV] (overrides chiral-scaling default "
                         "derived from --r-piD)")
@@ -807,6 +895,25 @@ def parse_args():
                    choices=list(_SPECIES_GETTERS),
                    help="Reference pion species used to set the ctau target "
                         "(default: T15 = longest-lived diagonal pion, bb̄-coupled)")
+    p.add_argument("--pion-basis", default="generator", choices=["generator", "flavour"],
+                   dest="pion_basis",
+                   help="Dark pion widths in the SU(Nf) generator basis (default; "
+                        "arXiv:2411.15073) or the U(Nf) flavour basis "
+                        "(DarkPionTChannelFlavourModel; arXiv:1803.08080)")
+    p.add_argument("--Nf", type=int, default=4, choices=[3, 4],
+                   help="Number of dark flavours (default 4; the 4th has no SM coupling)")
+    p.add_argument("--decay-basis", default="flavour", choices=["flavour", "eigen"],
+                   dest="decay_basis",
+                   help="Dark pion decays: 'flavour' (each flavour meson decays with its "
+                        "flavour-state width, as in arXiv:2411.15073 / 1803.08080) or 'eigen' (decay "
+                        "eigenstates of the degenerate pion multiplet, see "
+                        "_dark_hadron_section)")
+    p.add_argument("--no-mix-diagonal", dest="mix_diagonal", action="store_false",
+                   help="Do not equalise diagonal-pion lifetimes (flavour basis only)")
+    p.add_argument("--xqcut", type=float, default=120.0,
+                   help="MLM xqcut [GeV] for --merged (Pythia qCut = 1.5 xqcut; default 120). "
+                        "Validate for your process: the matched cross section should be stable "
+                        "and the differential jet rates smooth (pythia/mlm_validation.cc)")
     p.add_argument("--kappa-mode", default="universal",
                    choices=["universal", "diagonal", "down_only"],
                    dest="kappa_mode",
@@ -879,7 +986,9 @@ def main():
         # ctau only: solve for kappa
         try:
             kappa = solve_kappa(fD, args.mPiD, args.mXd, args.ctau,
-                                args.species, args.kappa_mode)
+                                args.species, args.kappa_mode, Nf=args.Nf,
+                                mix_diagonal=args.mix_diagonal,
+                                pion_basis=args.pion_basis)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
@@ -887,9 +996,10 @@ def main():
         ctau_source  = f"target for {args.species}"
         print(f"\nSolved κ = {kappa:.6f} for c·τ = {args.ctau} mm ({args.species}).")
 
-    # Build the model with the final kappa — generator basis (SU(4) adjoint)
-    model = DarkPionTChannelModel(fD=fD, m_piD=args.mPiD, m_X=args.mXd,
-                                  kappa=kappa, kappa_mode=args.kappa_mode)
+    # Build the model with the final kappa — generator basis (SU(Nf) adjoint)
+    model = _model_class(args.pion_basis)(fD=fD, m_piD=args.mPiD, m_X=args.mXd,
+                                          kappa=kappa, kappa_mode=args.kappa_mode,
+                                          Nf=args.Nf, mix_diagonal=args.mix_diagonal)
 
     # Default output dir uses whichever of ctau/kappa was given
     if args.output is not None:
@@ -900,7 +1010,8 @@ def main():
         outdir = f"cards/mXd{args.mXd:.0f}_mPiD{args.mPiD:.0f}_kappa{args.kappa:.4f}"
 
     # Print summary
-    print_summary(model, args.mXd, args.species, kappa, kappa_source, ctau_source)
+    print_summary(model, args.mXd, args.species, kappa, kappa_source, ctau_source,
+                  decay_basis=args.decay_basis)
 
     # Write cards
     os.makedirs(outdir, exist_ok=True)
@@ -911,9 +1022,10 @@ def main():
 
     write_param_card(param_path, args.mXd, mDarkQ, kappa, args.kappa_mode)
     write_run_card(run_path, nevents=args.nevents, sqrts=args.sqrts,
-                   merged=args.merged)
+                   merged=args.merged, xqcut=args.xqcut)
     write_pythia_card(pythia_path, model, args.mXd, mDarkQ, mRhoD, LambdaD,
-                      lhe_file=args.lhe)
+                      lhe_file=args.lhe, merged=args.merged,
+                      decay_basis=args.decay_basis, xqcut=args.xqcut)
     write_launch_script(launch_path, outdir,
                         process_dir=args.process_dir or "",
                         mg5_exe=args.mg5_exe)

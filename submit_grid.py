@@ -58,6 +58,8 @@ def build_job_script(
     env_setup: str,
     sbatch_opts: dict,
     extra_sbatch: list[str],
+    pythia_exe: str | None = None,
+    seed: int = 0,
 ) -> str:
     """
     Build a Slurm batch script for one parameter point.
@@ -100,12 +102,19 @@ def build_job_script(
         f'    echo "Run directory already exists: {run_dir} — skipping copy."',
         f'else',
         f'    echo "Creating isolated run directory: {run_dir}"',
-        f'    cp -r "{abs_process}" "{run_dir}"',
+        f'    cp -a "{abs_process}" "{run_dir}"   # -a keeps timestamps: no recompilation',
         f'fi',
+        "",
+        "# Match MadGraph's core count to the Slurm allocation",
+        f'sed -i "s/^.*nb_core *=.*/nb_core = ${{SLURM_CPUS_PER_TASK:-1}}/" "{run_dir}/Cards/me5_configuration.txt"',
         "",
         "# Copy cards for this parameter point",
         f'cp "{abs_cards}/param_card.dat" "{run_dir}/Cards/param_card.dat"',
         f'cp "{abs_cards}/run_card.dat"   "{run_dir}/Cards/run_card.dat"',
+        "",
+        "# Unique random seed per point: every run dir is a copy of the same",
+        "# process dir, so iseed = 0 would start all points from the same state.",
+        f'sed -i "s/^ *[0-9]* *= *iseed/  {seed} = iseed/" "{run_dir}/Cards/run_card.dat"',
         "",
         "# Launch MadGraph in batch mode with a unique run name",
         f'echo "Launching MadGraph for {point_name}"',
@@ -114,6 +123,19 @@ def build_job_script(
         "",
         f'echo "Done. Events are in {run_dir}/Events/{point_name}/"',
     ]
+
+    if pythia_exe:
+        lhe    = f"{run_dir}/Events/{point_name}/unweighted_events.lhe.gz"
+        hepmc  = f"{run_dir}/Events/{point_name}/{point_name}.hepmc"
+        lines += [
+            "",
+            "# Shower and hadronise with Pythia, then compress the HepMC3 output",
+            f'echo "Running Pythia for {point_name}"',
+            f'"{os.path.abspath(pythia_exe)}" "{abs_cards}/pythia_card.dat" "{lhe}" "{hepmc}" {seed} '
+            f'> "{run_dir}/Events/{point_name}/pythia.log" 2>&1',
+            f'tail -3 "{run_dir}/Events/{point_name}/pythia.log"',
+            f'gzip -f "{hepmc}"',
+        ]
 
     return "\n".join(lines) + "\n"
 
@@ -153,6 +175,8 @@ def parse_args():
     grid.add_argument("--species", default="T15",
                       choices=["T15", "T8", "T3", "(0,1)", "(0,2)", "(1,2)"],
                       help="Reference pion species for c·τ target (default: T15)")
+    grid.add_argument("--xqcut", type=float, default=None,
+                      help="MLM xqcut [GeV] passed to write_cards.py (--merged only)")
     grid.add_argument("--nevents", type=int, default=10000,
                       help="Events per job (default: 10000)")
     grid.add_argument("--sqrts", type=float, default=13600.0,
@@ -172,14 +196,18 @@ def parse_args():
     paths = p.add_argument_group("paths")
     paths.add_argument("--process-dir", required=True,
                        help="Compiled MadGraph process directory")
-    paths.add_argument("--runs-dir", default="/ourdisk/hpc/ouhep/jburzyns/dont_archive/model_benchmarking_runs",
-                       help="Directory for per-point isolated run dirs")
+    paths.add_argument("--runs-dir", default="runs",
+                       help="Directory for per-point isolated run dirs (default: runs/)")
     paths.add_argument("--cards-base", default="cards",
                        help="Base directory where write_cards.py writes cards (default: cards/)")
     paths.add_argument("--logs-dir", default="logs",
                        help="Directory for Slurm stdout/stderr logs (default: logs/)")
     paths.add_argument("--mg5-exe", default="mg5_aMC",
                        help="MadGraph executable (default: mg5_aMC)")
+    paths.add_argument("--pythia-exe", default=None,
+                       help="Compiled pythia/run_pythia.cc.  If given, each job "
+                            "showers its LHE with the point's pythia_card.dat and "
+                            "writes <point>.hepmc.gz next to the LHE.")
 
     # --- Environment ---
     env = p.add_argument_group("environment")
@@ -190,16 +218,16 @@ def parse_args():
 
     # --- Slurm options (none hardcoded) ---
     slurm = p.add_argument_group("slurm resource options")
-    slurm.add_argument("--partition", default="sooner_test",
-                       help="Slurm partition / queue name (default: sooner_test)")
+    slurm.add_argument("--partition", default=None,
+                       help="Slurm partition / queue name")
     slurm.add_argument("--account", default=None,
                        help="Slurm account / project to charge")
     slurm.add_argument("--time", default=None,
                        help="Wall-clock time limit (e.g. 04:00:00)")
     slurm.add_argument("--mem", default="16G",
                        help="Memory per node (default: 16G)")
-    slurm.add_argument("--container", default="el9hw",
-                       help="Slurm container image (default: el9hw)")
+    slurm.add_argument("--container", default=None,
+                       help="Slurm container image (sites with container support only)")
     slurm.add_argument("--cpus-per-task", default=None,
                        help="CPUs per task (default: cluster default)")
     slurm.add_argument("--constraint", default=None,
@@ -208,6 +236,11 @@ def parse_args():
                        metavar="'--key=value'",
                        help="Any additional #SBATCH option, e.g. "
                             "--sbatch-opt='--nodes=1'. Can be repeated.")
+
+    p.add_argument("--seed-offset", type=int, default=0,
+                   help="Point i gets random seed seed_offset + i + 1 for both "
+                        "MadGraph and Pythia (default: 0).  Use different offsets "
+                        "for different samples or reruns.")
 
     # --- Behaviour ---
     p.add_argument("--dry-run", action="store_true",
@@ -255,7 +288,7 @@ def main():
     submitted = 0
     skipped   = 0
 
-    for mXd, mPiD, val in grid:
+    for i_point, (mXd, mPiD, val) in enumerate(grid):
         if varying_param == "ctau":
             point_name = f"mXd{mXd:.0f}_mPiD{mPiD:.0f}_ctau{val:.0f}"
             wp_args    = ["--ctau", str(val)]
@@ -283,6 +316,7 @@ def main():
         write_cmd += ["--r-piD", str(args.r_piD)]
         if args.mDarkQ is not None: write_cmd += ["--mDarkQ", str(args.mDarkQ)]
         if args.mRhoD  is not None: write_cmd += ["--mRhoD",  str(args.mRhoD)]
+        if args.xqcut  is not None: write_cmd += ["--xqcut",  str(args.xqcut)]
 
         if args.dry_run:
             print(f"\n[dry-run] Would generate cards: {' '.join(write_cmd)}")
@@ -306,6 +340,8 @@ def main():
             env_setup   = args.env_setup,
             sbatch_opts = sbatch_opts,
             extra_sbatch = args.sbatch_opt,
+            pythia_exe  = args.pythia_exe,
+            seed        = args.seed_offset + i_point + 1,
         )
 
         if args.dry_run:

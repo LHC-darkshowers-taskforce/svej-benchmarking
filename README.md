@@ -69,12 +69,17 @@ The shape of the κ coupling matrix is controlled by `--kappa-mode`:
 | `--mPiD` | yes | — | Dark pion mass [GeV] |
 | `--ctau` | one of | — | Target c·τ [mm] for the reference species; solves for κ |
 | `--kappa` | one of | — | Coupling κ; computes c·τ from it |
-| `--fD` | no | `mPiD` | Dark decay constant [GeV] |
-| `--LambdaD` | no | `mPiD` | Dark confinement scale [GeV] |
-| `--mDarkQ` | no | `2 × mPiD` | Dark quark mass [GeV] |
-| `--mRhoD` | no | `4 × mPiD` | Dark rho mass [GeV] |
-| `--species` | no | `T15` | Reference pion species for c·τ target |
+| `--fD` | no | `mPiD` | Dark decay constant [GeV] (standard normalisation, f_π ≈ 92 MeV in QCD) |
+| `--r-piD` | no | `0.6` | m_πD / Λ_D; sets Λ_D, m_ρD and the dark-quark masses |
+| `--mDarkQ` | no | `Λ_D (r/5.5)²` | Lagrangian dark-quark mass used by MadGraph; Pythia uses the constituent mass (3 m_ρD + m_πD)/8 |
+| `--mRhoD` | no | `Λ_D √(5.76 + 1.5 r²)` | Dark rho mass [GeV] |
+| `--species` | no | `T15` | Reference pion for the c·τ target: `T3`/`T8`/`T15`, `(0,1)`, `(0,2)`, `(1,2)`, `diag`, `longest` (eigen basis: `eig_longest`, `eig_shortest`) |
 | `--kappa-mode` | no | `universal` | κ matrix structure (see above) |
+| `--Nf` | no | `4` | Dark flavours (3 or 4; the 4th has no SM coupling) |
+| `--pion-basis` | no | `generator` | `generator`: SU(Nf) generator basis (arXiv:2411.15073); `flavour`: U(Nf) flavour basis (arXiv:1803.08080) |
+| `--decay-basis` | no | `flavour` | `flavour`: flavour-state widths with diagonal mixing, as in arXiv:2411.15073 and 1803.08080. `eigen`: decay eigenstates of the degenerate pion multiplet (experimental) |
+| `--no-mix-diagonal` | no | mixing on | Do not equalise the diagonal-pion lifetimes |
+| `--xqcut` | no | `120` | MLM xqcut [GeV] for `--merged`; Pythia `qCut = 1.5 xqcut`. Validate per process: matched σ stable and differential jet rates smooth (`pythia/mlm_validation.cc`) |
 | `--nevents` | no | `10000` | Number of events in run card |
 | `--sqrts` | no | `13600` | Centre-of-mass energy [GeV] |
 | `--lhe` | no | `events.lhe` | LHE filename written into Pythia card |
@@ -173,14 +178,33 @@ bash launch.sh /path/to/process_dir /path/to/mg5_aMC
 
 ## Running Pythia
 
-Point Pythia at the LHE file produced by MadGraph:
+Use Pythia **≥ 8.315** (8.312 has Hidden Valley bugs) and the driver in
+`pythia/run_pythia.cc`, which reads the point's `pythia_card.dat`, an LHE file
+(gzip OK) and writes HepMC3:
 
 ```bash
-python write_cards.py ... --lhe mg5_output/dark_quark_pair_multijet/Events/run_01/unweighted_events.lhe.gz
+g++ -O2 -std=c++17 pythia/run_pythia.cc -o run_pythia \
+    -I$PREFIX/include -L$PREFIX/lib -Wl,-rpath,$PREFIX/lib -lpythia8 -lHepMC3 -ldl
+./run_pythia cards/<point>/pythia_card.dat Events/<run>/unweighted_events.lhe.gz out.hepmc <seed>
 ```
 
-Then pass `pythia_card.dat` to your Pythia driver. The card sets all dark
-sector masses, lifetimes, branching ratios, and HiddenValley parameters.
+For `--merged` cards the driver installs Pythia's `JetMatchingMadgraph`
+UserHook — `JetMatching:merge = on` in a card does nothing on its own. The
+summary reports accepted events per ME light-parton multiplicity and the
+matched cross section (`sigmaGen`). `pythia/mlm_validation.cc` additionally
+writes differential jet rates for merging-scale studies.
+
+### Conventions worth knowing
+
+- The mediator width is written analytically into the param card: MG5's
+  `Auto` sets partial widths below 0.1 GeV of coloured particles to zero, which
+  gave Γ_X = 0 at small κ.
+- Pion decay channels open only above the lightest two-meson final state with
+  the right flavour (b d̄ 5.41, b s̄ 5.50, b b̄ 9.53 GeV); a warning flags any
+  channel Pythia (b mass 4.8 GeV) could not open.
+- Off-diagonal widths sum both orderings q_i q̄_j and q_j q̄_i; both bases use
+  the 1/(128π) normalisation of arXiv:2411.15073.
+- The merged proc card vetoes `$$ x x~` — `$$ x` alone leaves s-channel x̄.
 
 ---
 
@@ -250,6 +274,9 @@ python submit_grid.py ... --dry-run
 | `--cards-base` | Base directory for generated cards (default: `cards/`) |
 | `--nevents` | Events per job (default: 10000) |
 | `--sqrts` | Centre-of-mass energy [GeV] (default: 13600) |
+| `--pythia-exe` | Compiled `pythia/run_pythia.cc`; if given, each job also showers its LHE and writes `<point>.hepmc.gz` |
+| `--seed-offset` | Point i gets seed offset+i+1 for MadGraph and Pythia (use different offsets per sample) |
+| `--xqcut` | MLM xqcut passed to `write_cards.py` (`--merged`) |
 | `--dry-run` | Print job scripts without submitting |
 
 Events land in `runs/<point>/Events/<point>/`.
